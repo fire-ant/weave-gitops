@@ -77,8 +77,5 @@ jobs:
           tar -xvf relok8s_0.5.1_linux_x86_64.tar.gz
           sudo chmod +x relok8s && sudo  mv relok8s /usr/bin/
       - name: Push Charts to Registry
-        run: |
-          for pkg in charts/*; do
-            bash ${GITHUB_WORKSPACE}/.github/scripts/package.sh "${pkg}" $REGISTRY $REPOSITORY $DOCKER_TOKEN
-          done
+        run: bash ${GITHUB_WORKSPACE}/.github/scripts/package.sh "charts/gitops-server" $REGISTRY $REPOSITORY $DOCKER_TOKEN
 

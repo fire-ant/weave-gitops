@@ -38,7 +38,7 @@ jobs:
         uses: repo-sync/github-sync@v2
         with:
           source_repo: "weaveworks/weave-gitops"
-          source_branch: "origin/main"
+          source_branch: "main"
           destination_branch: ${{ env.REPO_BRANCH }}
           github_token: ${{ secrets.WORKFLOW_TOKEN }}
 

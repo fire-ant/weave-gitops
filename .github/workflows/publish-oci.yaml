@@ -21,7 +21,7 @@ permissions:
 jobs:
   publish-oci:
     runs-on: ubuntu-latest
-    steps:
+    steps:        
       - name: create branch
         uses: peterjgrainger/action-create-branch@v2.2.0
         env:
@@ -38,7 +38,7 @@ jobs:
         uses: repo-sync/github-sync@v2
         with:
           source_repo: "weaveworks/weave-gitops"
-          source_branch: "main"
+          source_branch: "origin/main"
           destination_branch: ${{ env.REPO_BRANCH }}
           github_token: ${{ secrets.WORKFLOW_TOKEN }}
 

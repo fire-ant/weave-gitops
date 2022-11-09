@@ -23,8 +23,8 @@ EOF
     echo "- \"{{ .$dep.image.registry }}/{{ .$dep.image.repository }}:{{ .$dep.image.tag }}\"" >> $dir/.relok8s-images.yaml
     done
   version=$(helm show chart $dir | grep ^version: | cut -d : -f 2  | tr -d ' ')
-  helm package $1 --dependency-update
-  relok8s chart move $base-$version.tgz --registry $registry --repo-prefix $user --out '*.oci.tgz' --yes
+  helm package $1=folder --dependency-update
+  relok8s chart move weave-gitops-$version.tgz --registry $registry --repo-prefix $user --out '*.oci.tgz' --yes
   helm push $base-$version.oci.tgz oci://$registry/$user
   COSIGN_EXPERIMENTAL=1 cosign sign $registry/$user/$base:$version
   COSIGN_EXPERIMENTAL=1 cosign verify $registry/$user/$base:$version

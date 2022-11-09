@@ -79,9 +79,6 @@ jobs:
       - name: Push Charts to Registry
         run: |
           for pkg in charts/*; do
-            if [ -z "${pkg:-}" ]; then
-              break
-            fi
             bash ${GITHUB_WORKSPACE}/.github/scripts/package.sh "${pkg}" $REGISTRY $REPOSITORY $DOCKER_TOKEN
           done
 

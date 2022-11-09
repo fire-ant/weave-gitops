@@ -69,6 +69,6 @@ jobs:
             if [ -z "${pkg:-}" ]; then
               break
             fi
-            bash ${GITHUB_WORKSPACE}/package.sh "${pkg}" $REGISTRY $REPOSITORY $DOCKER_TOKEN
+            bash ${GITHUB_WORKSPACE}/.github/scripts/package.sh "${pkg}" $REGISTRY $REPOSITORY $DOCKER_TOKEN
           done
 

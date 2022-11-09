@@ -5,7 +5,6 @@ env:
   REPOSITORY: chr1slavery
   DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
   REPO_BRANCH: "gitops-server"
-  CHART_LOC: "charts"
 
 on:
   schedule:
@@ -66,7 +65,7 @@ jobs:
           sudo chmod +x relok8s && sudo  mv relok8s /usr/bin/
       - name: Push Charts to Registry
         run: |
-          for pkg in $CHART_LOC/*; do
+          for pkg in charts/*; do
             if [ -z "${pkg:-}" ]; then
               break
             fi

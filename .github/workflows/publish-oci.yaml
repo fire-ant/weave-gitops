@@ -4,6 +4,7 @@ env:
   REGISTRY: docker.io
   REPOSITORY: chr1slavery
   DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+  REPO_BRANCH: "gitops-server"
 
 on:
   schedule:
@@ -30,9 +31,9 @@ jobs:
       - name: Sync upstream changes
         uses: repo-sync/github-sync@v2
         with:
-          source_repo: "bitnami/charts"
+          source_repo: "weaveworks/weave-gitops"
           source_branch: "main"
-          destination_branch: "bitnami"
+          destination_branch: ${{ env.REPO_BRANCH }}
           github_token: ${{ secrets.WORKFLOW_TOKEN }}
 
       - name: Login to Docker Hub

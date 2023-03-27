@@ -7,10 +7,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/weaveworks/weave-gitops/core/clustersmngr"
-	"github.com/weaveworks/weave-gitops/core/logger"
 	"github.com/weaveworks/weave-gitops/core/nsaccess"
 	pb "github.com/weaveworks/weave-gitops/pkg/api/core"
-	"github.com/weaveworks/weave-gitops/pkg/telemetry"
+	"github.com/weaveworks/weave-gitops/pkg/services/crd"
 	"k8s.io/client-go/rest"
 )
 
@@ -36,6 +35,7 @@ type coreServer struct {
 	nsChecker       nsaccess.Checker
 	clustersManager clustersmngr.ClustersManager
 	primaryKinds    *PrimaryKinds
+	crd             crd.Fetcher
 }
 
 type CoreServerConfig struct {
@@ -45,25 +45,28 @@ type CoreServerConfig struct {
 	NSAccess        nsaccess.Checker
 	ClustersManager clustersmngr.ClustersManager
 	PrimaryKinds    *PrimaryKinds
+	CRDService      crd.Fetcher
 }
 
-func NewCoreConfig(log logr.Logger, cfg *rest.Config, clusterName string, clustersManager clustersmngr.ClustersManager) CoreServerConfig {
+func NewCoreConfig(log logr.Logger, cfg *rest.Config, clusterName string, clustersManager clustersmngr.ClustersManager) (CoreServerConfig, error) {
+	kinds, err := DefaultPrimaryKinds()
+	if err != nil {
+		return CoreServerConfig{}, err
+	}
+
 	return CoreServerConfig{
 		log:             log.WithName("core-server"),
 		RestCfg:         cfg,
 		clusterName:     clusterName,
 		NSAccess:        nsaccess.NewChecker(nsaccess.DefautltWegoAppRules),
 		ClustersManager: clustersManager,
-		PrimaryKinds:    DefaultPrimaryKinds(),
-	}
+		PrimaryKinds:    kinds,
+	}, nil
 }
 
 func NewCoreServer(cfg CoreServerConfig) (pb.CoreServer, error) {
-	err := telemetry.InitTelemetry(cfg.ClustersManager)
-	if err != nil {
-		// If there's an error turning on telemetry, that's not a
-		// thing that should interrupt anything else
-		cfg.log.V(logger.LogLevelDebug).Info("Couldn't enable telemetry", "error", err)
+	if cfg.CRDService == nil {
+		cfg.CRDService = crd.NewFetcher(cfg.log, cfg.ClustersManager)
 	}
 
 	return &coreServer{
@@ -71,5 +74,6 @@ func NewCoreServer(cfg CoreServerConfig) (pb.CoreServer, error) {
 		nsChecker:       cfg.NSAccess,
 		clustersManager: cfg.ClustersManager,
 		primaryKinds:    cfg.PrimaryKinds,
+		crd:             cfg.CRDService,
 	}, nil
 }

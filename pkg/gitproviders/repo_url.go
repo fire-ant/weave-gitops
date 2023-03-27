@@ -13,8 +13,14 @@ import (
 
 type RepositoryURLProtocol string
 
-const RepositoryURLProtocolHTTPS RepositoryURLProtocol = "https"
-const RepositoryURLProtocolSSH RepositoryURLProtocol = "ssh"
+const (
+	RepositoryURLProtocolHTTPS RepositoryURLProtocol = "https"
+	RepositoryURLProtocolSSH   RepositoryURLProtocol = "ssh"
+	// AzureDevOpsHTTPDefaultDomain is used for HTTP clone URLs
+	AzureDevOpsHTTPDefaultDomain = "dev.azure.com"
+	// AzureDevOpsSSHDefaultDomain is used for SSH clone URLs
+	AzureDevOpsSSHDefaultDomain = "ssh.dev.azure.com"
+)
 
 type RepoURL struct {
 	repoName   string
@@ -87,23 +93,23 @@ func (n RepoURL) Protocol() RepositoryURLProtocol {
 
 func getOwnerFromURL(url url.URL, providerName GitProviderName) (string, error) {
 	url.Path = strings.TrimPrefix(url.Path, "/")
-
 	parts := strings.Split(url.Path, "/")
 	if len(parts) < 2 {
 		return "", fmt.Errorf("could not get owner from url %v", url.String())
 	}
 
-	if providerName == GitProviderGitLab {
-		if len(parts) > 3 {
-			return "", fmt.Errorf("a subgroup in a subgroup is not currently supported")
-		}
-
-		if len(parts) > 2 {
-			return parts[0] + "/" + parts[1], nil
+	// Examples of Azure DevOps URLs:
+	// 	- https://weaveworks@dev.azure.com/weaveworks/weave-gitops-integration/_git/config
+	// 	- git@ssh.dev.azure.com:v3/weaveworks/weave-gitops-integration/config
+	if providerName == GitProviderAzureDevOps {
+		if parts[len(parts)-2] == "_git" {
+			return strings.Join(parts[:2], "/"), nil
+		} else {
+			return strings.Join(parts[1:3], "/"), nil
 		}
 	}
 
-	return parts[0], nil
+	return strings.Join(parts[:len(parts)-1], "/"), nil
 }
 
 // detectGitProviderFromURL accepts a url related to a git repo and
@@ -114,9 +120,11 @@ func detectGitProviderFromURL(raw string, gitHostTypes map[string]string) (GitPr
 		return "", fmt.Errorf("could not parse git repo url %q: %w", raw, err)
 	}
 
-	// defaults for github and gitlab
+	// defaults for github, gitlab and azure devops
 	gitHostTypes[github.DefaultDomain] = string(GitProviderGitHub)
 	gitHostTypes[gitlab.DefaultDomain] = string(GitProviderGitLab)
+	gitHostTypes[AzureDevOpsHTTPDefaultDomain] = string(GitProviderAzureDevOps)
+	gitHostTypes[AzureDevOpsSSHDefaultDomain] = string(GitProviderAzureDevOps)
 
 	provider := gitHostTypes[u.Host]
 	if provider == "" {
@@ -147,7 +155,7 @@ func normalizeRepoURLString(url string) (string, error) {
 	url = strings.TrimSuffix(url, "/")
 
 	if !strings.HasSuffix(url, ".git") {
-		url = url + ".git"
+		url += ".git"
 	}
 
 	u, err := parseGitURL(url)

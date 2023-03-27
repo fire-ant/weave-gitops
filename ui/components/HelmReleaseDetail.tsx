@@ -6,6 +6,7 @@ import { HelmRelease } from "../lib/objects";
 import { automationLastUpdated } from "../lib/utils";
 import Alert from "./Alert";
 import AutomationDetail from "./AutomationDetail";
+import ClusterDashboardLink from "./ClusterDashboardLink";
 import { InfoField } from "./InfoList";
 import Interval from "./Interval";
 import { routeTab } from "./KustomizationDetail";
@@ -56,17 +57,20 @@ function HelmReleaseDetail({
   customTabs,
   customActions,
 }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && helmRelease?.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && helmRelease?.tenant
       ? [["Tenant", helmRelease?.tenant]]
       : [];
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", helmRelease?.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [
+        [
+          "Cluster",
+          <ClusterDashboardLink clusterName={helmRelease?.clusterName} />,
+        ],
+      ]
+    : [];
 
   return (
     <AutomationDetail
@@ -75,6 +79,7 @@ function HelmReleaseDetail({
       customTabs={customTabs}
       customActions={customActions}
       info={[
+        ["Kind", Kind.HelmRelease],
         ["Source", helmChartLink(helmRelease)],
         ["Chart", helmRelease?.helmChart.chart],
         ["Chart Version", helmRelease.helmChart.version],
@@ -87,6 +92,7 @@ function HelmReleaseDetail({
           "Last Updated",
           <Timestamp time={automationLastUpdated(helmRelease)} />,
         ],
+        ["Namespace", helmRelease?.namespace],
       ]}
     />
   );

@@ -3,6 +3,7 @@ import styled from "styled-components";
 import { useFeatureFlags } from "../hooks/featureflags";
 import { Kind } from "../lib/api/core/types.pb";
 import { HelmRepository } from "../lib/objects";
+import ClusterDashboardLink from "./ClusterDashboardLink";
 import { InfoField } from "./InfoList";
 import Interval from "./Interval";
 import Link from "./Link";
@@ -20,17 +21,20 @@ function HelmRepositoryDetail({
   helmRepository,
   customActions,
 }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && helmRepository.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && helmRepository.tenant
       ? [["Tenant", helmRepository.tenant]]
       : [];
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", helmRepository.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [
+        [
+          "Cluster",
+          <ClusterDashboardLink clusterName={helmRepository?.clusterName} />,
+        ],
+      ]
+    : [];
 
   return (
     <SourceDetail
@@ -39,7 +43,7 @@ function HelmRepositoryDetail({
       source={helmRepository}
       customActions={customActions}
       info={[
-        ["Type", Kind.HelmRepository],
+        ["Kind", Kind.HelmRepository],
         ["Repository Type", helmRepository.repositoryType.toLowerCase()],
         ["URL", <Link href={helmRepository.url}>{helmRepository.url}</Link>],
         [

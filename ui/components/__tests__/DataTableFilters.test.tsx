@@ -121,11 +121,13 @@ describe("DataTableFilters", () => {
       expect(filtered).toHaveLength(4);
     });
     it("filters rows", () => {
-      const filtered = filterRows(rows, { name: ["cool"] });
+      const filtered = filterRows(rows, { name: { options: ["cool"] } });
       expect(filtered).toHaveLength(1);
     });
     it("filters rows with more than one value in a filter key", () => {
-      const filtered = filterRows(rows, { name: ["cool", "slick"] });
+      const filtered = filterRows(rows, {
+        name: { options: ["cool", "slick"] },
+      });
       expect(filtered).toHaveLength(2);
     });
     it("ANDs between categories", () => {
@@ -135,13 +137,13 @@ describe("DataTableFilters", () => {
         { name: "c", namespace: "ns2", type: "git" },
       ];
       const filtered = filterRows(rows, {
-        namespace: ["ns1"],
+        namespace: { options: ["ns1"] },
       });
       expect(filtered).toHaveLength(2);
 
       const filtered2 = filterRows(rows, {
-        namespace: ["ns1"],
-        type: ["git"],
+        namespace: { options: ["ns1"] },
+        type: { options: ["git"] },
       });
       expect(filtered2).toHaveLength(1);
 
@@ -160,13 +162,13 @@ describe("DataTableFilters", () => {
       { name: "c", namespace: "ns2", type: "git" },
     ];
     const filtered = filterRows(rows, {
-      namespace: ["ns1", "ns2"],
+      namespace: { options: ["ns1", "ns2"] },
     });
     expect(filtered).toHaveLength(3);
 
     const filtered2 = filterRows(rows, {
-      namespace: ["ns1"],
-      type: ["git", "bucket"],
+      namespace: { options: ["ns1"] },
+      type: { options: ["git", "bucket"] },
     });
     expect(filtered2).toHaveLength(2);
 
@@ -565,7 +567,7 @@ describe("DataTableFilters", () => {
       ...filterConfig(rows, "type"),
     };
 
-    const search = `?filters=type${uriEncodedSeparator}foo_`;
+    const search = `?filters=type${uriEncodedSeparator}foo_&search=cool_`;
 
     render(
       withTheme(
@@ -582,8 +584,8 @@ describe("DataTableFilters", () => {
       )
     );
     const tableRows = document.querySelectorAll("tbody tr");
-    expect(tableRows).toHaveLength(2);
-    expect(tableRows[0].innerHTML).toContain("foo");
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0].innerHTML).toContain("cool");
   });
   it("returns a query string on filter change", () => {
     const queryString = filterSelectionsToQueryString({
@@ -591,7 +593,8 @@ describe("DataTableFilters", () => {
     });
     expect(queryString).toEqual(`filters=type${uriEncodedSeparator}foo_`);
     expect(parseFilterStateFromURL(queryString)).toEqual({
-      [`type${filterSeparator}foo`]: true,
+      initialSelections: { [`type${filterSeparator}foo`]: true },
+      textFilters: [],
     });
   });
 });

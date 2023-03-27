@@ -50,6 +50,37 @@
         ]
       }
     },
+    "/v1/crd/is_available": {
+      "get": {
+        "summary": "IsCRDAvailable returns with a hashmap where the keys are the names of\nthe clusters, and the value is a boolean indicating whether given CRD is\ninstalled or not on that cluster.",
+        "operationId": "Core_IsCRDAvailable",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1IsCRDAvailableResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Core"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "summary": "ListEvents returns with a list of events",
@@ -189,6 +220,60 @@
         ]
       }
     },
+    "/v1/inventory": {
+      "get": {
+        "operationId": "Core_GetInventory",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetInventoryResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "clusterName",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "withChildren",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Core"
+        ]
+      }
+    },
     "/v1/namespace/flux": {
       "post": {
         "summary": "GetFluxNamespace returns with a namespace with a specific label.",
@@ -295,7 +380,7 @@
       }
     },
     "/v1/objects": {
-      "get": {
+      "post": {
         "summary": "ListObjects gets data about primary objects.",
         "operationId": "Core_ListObjects",
         "responses": {
@@ -314,22 +399,12 @@
         },
         "parameters": [
           {
-            "name": "namespace",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          },
-          {
-            "name": "kind",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          },
-          {
-            "name": "clusterName",
-            "in": "query",
-            "required": false,
-            "type": "string"
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1ListObjectsRequest"
+            }
           }
         ],
         "tags": [
@@ -362,6 +437,39 @@
             "required": true,
             "schema": {
               "$ref": "#/definitions/v1GetReconciledObjectsRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Core"
+        ]
+      }
+    },
+    "/v1/session_logs": {
+      "post": {
+        "summary": "GetSessionLogs returns the logs for a given session",
+        "operationId": "Core_GetSessionLogs",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetSessionLogsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1GetSessionLogsRequest"
             }
           }
         ],
@@ -656,6 +764,17 @@
         }
       }
     },
+    "v1GetInventoryResponse": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/v1InventoryEntry"
+          }
+        }
+      }
+    },
     "v1GetObjectResponse": {
       "type": "object",
       "properties": {
@@ -698,6 +817,49 @@
         }
       }
     },
+    "v1GetSessionLogsRequest": {
+      "type": "object",
+      "properties": {
+        "sessionNamespace": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "logSourceFilter": {
+          "type": "string"
+        },
+        "logLevelFilter": {
+          "type": "string"
+        }
+      }
+    },
+    "v1GetSessionLogsResponse": {
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/v1LogEntry"
+          }
+        },
+        "nextToken": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "logSources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "v1GetVersionResponse": {
       "type": "object",
       "properties": {
@@ -735,6 +897,31 @@
         }
       },
       "title": "GroupVersionKind represents an objects Kubernetes API type data"
+    },
+    "v1InventoryEntry": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/v1InventoryEntry"
+          }
+        }
+      }
+    },
+    "v1IsCRDAvailableResponse": {
+      "type": "object",
+      "properties": {
+        "clusters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
     },
     "v1ListError": {
       "type": "object",
@@ -806,6 +993,26 @@
         }
       }
     },
+    "v1ListObjectsRequest": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "clusterName": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "v1ListObjectsResponse": {
       "type": "object",
       "properties": {
@@ -820,6 +1027,26 @@
           "items": {
             "$ref": "#/definitions/v1ListError"
           }
+        }
+      }
+    },
+    "v1LogEntry": {
+      "type": "object",
+      "properties": {
+        "timestamp": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "sortingKey": {
+          "type": "string"
         }
       }
     },
@@ -869,6 +1096,9 @@
           "items": {
             "$ref": "#/definitions/v1GroupVersionKind"
           }
+        },
+        "info": {
+          "type": "string"
         }
       }
     },

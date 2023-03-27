@@ -11,6 +11,7 @@ import (
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1beta2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/metadata"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,7 +27,7 @@ func TestSync(t *testing.T) {
 
 	ctx := context.Background()
 
-	c, _ := makeGRPCServer(k8sEnv.Rest, t)
+	c := makeGRPCServer(k8sEnv.Rest, t)
 
 	scheme, err := kube.CreateScheme()
 	g.Expect(err).To(BeNil())
@@ -117,8 +118,15 @@ func TestSync(t *testing.T) {
 			defer close(done)
 
 			go func() {
-				_, err := c.SyncFluxObject(ctx, msg)
-				done <- err
+				md := metadata.Pairs(MetadataUserKey, "anne", MetadataGroupsKey, "system:masters")
+				outgoingCtx := metadata.NewOutgoingContext(ctx, md)
+				_, err := c.SyncFluxObject(outgoingCtx, msg)
+				select {
+				case <-done:
+					return
+				default:
+					done <- err
+				}
 			}()
 
 			ticker := time.NewTicker(500 * time.Millisecond)

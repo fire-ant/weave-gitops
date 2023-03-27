@@ -1,14 +1,16 @@
 import * as React from "react";
 import styled from "styled-components";
+import { useFeatureFlags } from "../hooks/featureflags";
+import { Kind } from "../lib/api/core/types.pb";
 import { Kustomization } from "../lib/objects";
 import { automationLastUpdated } from "../lib/utils";
-import { useFeatureFlags } from "../hooks/featureflags";
 import Alert from "./Alert";
 import AutomationDetail from "./AutomationDetail";
+import ClusterDashboardLink from "./ClusterDashboardLink";
+import { InfoField } from "./InfoList";
 import Interval from "./Interval";
 import SourceLink from "./SourceLink";
 import Timestamp from "./Timestamp";
-import { InfoField } from "./InfoList";
 
 export interface routeTab {
   name: string;
@@ -30,18 +32,21 @@ function KustomizationDetail({
   customTabs,
   customActions,
 }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && kustomization?.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && kustomization?.tenant
       ? [["Tenant", kustomization?.tenant]]
       : [];
 
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", kustomization?.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [
+        [
+          "Cluster",
+          <ClusterDashboardLink clusterName={kustomization?.clusterName} />,
+        ],
+      ]
+    : [];
 
   return (
     <AutomationDetail
@@ -50,6 +55,7 @@ function KustomizationDetail({
       automation={kustomization}
       customActions={customActions}
       info={[
+        ["Kind", Kind.Kustomization],
         [
           "Source",
           <SourceLink
@@ -66,6 +72,7 @@ function KustomizationDetail({
           "Last Updated",
           <Timestamp time={automationLastUpdated(kustomization)} />,
         ],
+        ["Namespace", kustomization?.namespace],
       ]}
     />
   );

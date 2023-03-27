@@ -6,6 +6,7 @@ import Timestamp from "../components/Timestamp";
 import { useFeatureFlags } from "../hooks/featureflags";
 import { Kind } from "../lib/api/core/types.pb";
 import { HelmChart } from "../lib/objects";
+import ClusterDashboardLink from "./ClusterDashboardLink";
 import { InfoField } from "./InfoList";
 
 type Props = {
@@ -15,17 +16,20 @@ type Props = {
 };
 
 function HelmChartDetail({ className, helmChart, customActions }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && helmChart.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && helmChart.tenant
       ? [["Tenant", helmChart.tenant]]
       : [];
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", helmChart.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [
+        [
+          "Cluster",
+          <ClusterDashboardLink clusterName={helmChart?.clusterName} />,
+        ],
+      ]
+    : [];
 
   return (
     <SourceDetail
@@ -34,7 +38,7 @@ function HelmChartDetail({ className, helmChart, customActions }: Props) {
       source={helmChart}
       customActions={customActions}
       info={[
-        ["Type", Kind.HelmChart],
+        ["Kind", Kind.HelmChart],
         ["Chart", helmChart.chart],
         ["Version", helmChart.version],
         ["Current Revision", helmChart.revision],

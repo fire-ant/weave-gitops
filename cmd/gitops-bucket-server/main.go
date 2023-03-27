@@ -2,60 +2,87 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
-	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
-	"net/http/httptest"
+	"github.com/weaveworks/weave-gitops/pkg/http"
+	"github.com/weaveworks/weave-gitops/pkg/s3"
 )
 
 func main() {
+	logger := log.New(os.Stdout, "", 0)
+
+	awsAccessKeyID := os.Getenv("AWS_ACCESS_KEY_ID")
+	if awsAccessKeyID == "" {
+		minioRootUser := os.Getenv("MINIO_ROOT_USER")
+		if minioRootUser == "" {
+			logger.Fatal("AWS_ACCESS_KEY_ID or MINIO_ROOT_USER must be set")
+			return
+		}
+
+		awsAccessKeyID = minioRootUser
+	}
+
+	awsSecretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if awsSecretAccessKey == "" {
+		minioRootPassword := os.Getenv("MINIO_ROOT_PASSWORD")
+		if minioRootPassword == "" {
+			logger.Fatal("AWS_SECRET_ACCESS_KEY or MINIO_ROOT_PASSWORD must be set")
+			return
+		}
+
+		awsSecretAccessKey = minioRootPassword
+	}
+
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGKILL)
+		syscall.SIGTERM)
 	defer cancel()
 
-	logger := log.New(os.Stdout, "", 0)
-	backend := s3mem.New()
-	s3 := gofakes3.New(backend,
+	s3Server := gofakes3.New(s3mem.New(),
 		gofakes3.WithAutoBucket(true),
-		gofakes3.WithLogger(gofakes3.StdLog(logger, gofakes3.LogErr, gofakes3.LogWarn, gofakes3.LogInfo)))
+		gofakes3.WithLogger(
+			gofakes3.StdLog(
+				logger,
+				gofakes3.LogErr,
+				gofakes3.LogWarn,
+				gofakes3.LogInfo,
+			))).Server()
 
-	port := "9000"
-	// check args
-	if len(os.Args) > 1 {
-		port = os.Args[1]
-		// part string to integer
-		_, err := strconv.Atoi(port)
-		if err != nil {
-			log.Fatalf("Invalid port number: %s", port)
-		}
+	var (
+		httpPort, httpsPort int
+		certFile, keyFile   string
+	)
+
+	flag.IntVar(&httpPort, "http-port", 9000, "TCP port to listen on for HTTP connections")
+	flag.IntVar(&httpsPort, "https-port", 9443, "TCP port to listen on for HTTPS connections")
+	flag.StringVar(&certFile, "cert-file", "", "Path to the HTTPS server certificate file")
+	flag.StringVar(&keyFile, "key-file", "", "Path to the HTTPS server certificate key file")
+	flag.Parse()
+
+	if certFile == "" {
+		logger.Fatalf("please specify the path to the HTTPS server certificate file")
 	}
 
-	// create a listener with the desired port.
-	listener, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		log.Fatal(err)
+	if keyFile == "" {
+		logger.Fatalf("please specify the path to the HTTPS server certificate key file")
 	}
 
-	ts := httptest.NewUnstartedServer(s3.Server())
-	if err := ts.Listener.Close(); err != nil {
-		log.Fatal(err)
+	srv := http.MultiServer{
+		HTTPPort:  httpPort,
+		HTTPSPort: httpsPort,
+		CertFile:  certFile,
+		KeyFile:   keyFile,
+		Logger:    logger,
 	}
 
-	ts.Listener = listener
-	// Start the server.
-	ts.Start()
-	defer ts.Close()
-
-	logger.Println(ts.URL)
-
-	<-ctx.Done()
+	if err := srv.Start(ctx, s3.AuthMiddleware(awsAccessKeyID, awsSecretAccessKey, s3Server)); err != nil {
+		logger.Fatalf("server exited unexpectedly: %s", err)
+	}
 }

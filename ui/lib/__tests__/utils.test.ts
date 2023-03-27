@@ -1,11 +1,14 @@
-import { jest } from "@jest/globals";
+import { GetVersionResponse } from "../api/core/core.pb";
+import { Kind } from "../api/core/types.pb";
 import { Automation, HelmRelease, Kustomization } from "../objects";
 import {
   convertGitURLToGitProvider,
   convertImage,
+  createYamlCommand,
+  formatLogTimestamp,
   formatMetadataKey,
+  getAppVersion,
   getSourceRefForAutomation,
-  gitlabOAuthRedirectURI,
   isAllowedLink,
   isHTTP,
   makeImageString,
@@ -14,29 +17,6 @@ import {
 } from "../utils";
 
 describe("utils lib", () => {
-  describe("gitlabOAuthRedirectURI", () => {
-    let windowSpy;
-
-    beforeEach(() => {
-      windowSpy = jest.spyOn(window, "window", "get");
-    });
-
-    afterEach(() => {
-      windowSpy.mockRestore();
-    });
-
-    it("returns correct URL", () => {
-      windowSpy.mockImplementation(() => ({
-        location: {
-          origin: "https://example.com",
-        },
-      }));
-
-      expect(gitlabOAuthRedirectURI()).toEqual(
-        "https://example.com/oauth/gitlab"
-      );
-    });
-  });
   describe("isHTTP", () => {
     it("detects HTTP", () => {
       expect(isHTTP("http://www.google.com")).toEqual(true);
@@ -330,5 +310,100 @@ describe("utils lib", () => {
 
       expect(getSourceRefForAutomation(automation)).toBeUndefined();
     });
+  });
+  describe("getAppVersion", () => {
+    const fullResponse: GetVersionResponse = {
+      semver: "semver",
+      commit: "commit",
+      branch: "branch",
+      buildTime: "buildTime",
+      fluxVersion: "flux-version",
+      kubeVersion: "kube-version",
+    };
+    const defaultVersion = "default version";
+    const defaultVersionPrefix = "v";
+
+    it("should return default version for full response if loading data", () => {
+      const appVersion = getAppVersion(
+        fullResponse,
+        defaultVersion,
+        true,
+        defaultVersionPrefix
+      );
+
+      expect(appVersion.versionText).toEqual(`vdefault version`);
+      expect(appVersion.versionHref).toEqual(
+        "https://github.com/weaveworks/weave-gitops/releases/tag/vdefault version"
+      );
+    });
+    it("should return api version for full response if not loading data", () => {
+      const appVersion = getAppVersion(
+        fullResponse,
+        defaultVersion,
+        false,
+        defaultVersionPrefix
+      );
+
+      expect(appVersion.versionText).toEqual("branch-commit");
+      expect(appVersion.versionHref).toEqual(
+        "https://github.com/weaveworks/weave-gitops/commit/commit"
+      );
+    });
+    it("should return default version without prefix for full response if loading data", () => {
+      const appVersion = getAppVersion(fullResponse, defaultVersion, true);
+
+      expect(appVersion.versionText).toEqual(`default version`);
+      expect(appVersion.versionHref).toEqual(
+        "https://github.com/weaveworks/weave-gitops/releases/tag/vdefault version"
+      );
+    });
+    it("should return api version without prefix for full response", () => {
+      const appVersion = getAppVersion(fullResponse, defaultVersion, false);
+
+      expect(appVersion.versionText).toEqual("branch-commit");
+      expect(appVersion.versionHref).toEqual(
+        "https://github.com/weaveworks/weave-gitops/commit/commit"
+      );
+    });
+  });
+  describe("formatLogTimestamp", () => {
+    it("should format non-empty timestamp", () => {
+      expect(formatLogTimestamp("2023-01-31T13:27:56-05:00", "UTC+1")).toEqual(
+        "2023-01-31 19:27:56 UTC+1"
+      );
+      expect(formatLogTimestamp("2023-02-03T13:27:56-01:00", "UTC-10")).toEqual(
+        "2023-02-03 04:27:56 UTC-10"
+      );
+      expect(formatLogTimestamp("2023-02-03T13:27:56-01:00", "UTC")).toEqual(
+        "2023-02-03 14:27:56 UTC"
+      );
+      expect(formatLogTimestamp("2023-02-04T18:36:01+01:00", "UTC+3")).toEqual(
+        "2023-02-04 20:36:01 UTC+3"
+      );
+    });
+    it("should return a hyphen for undefined timestamp", () => {
+      expect(formatLogTimestamp(undefined)).toEqual("-");
+    });
+    it("should return a hyphen for empty string", () => {
+      expect(formatLogTimestamp("")).toEqual("-");
+    });
+  });
+});
+
+describe("createYamlCommand", () => {
+  it("creates kubectl get yaml string for objects with namespaces", () => {
+    expect(
+      createYamlCommand(Kind.Kustomization, "test", "flux-system")
+    ).toEqual(`kubectl get kustomization test -n flux-system -o yaml`);
+  });
+  it("creates kubectl get yaml string for objects without namespaces", () => {
+    expect(createYamlCommand(Kind.Kustomization, "test", undefined)).toEqual(
+      `kubectl get kustomization test -o yaml`
+    );
+  });
+  it("returns null if name or kind are false values", () => {
+    expect(createYamlCommand(undefined, undefined, "flux-system")).toEqual(
+      null
+    );
   });
 });

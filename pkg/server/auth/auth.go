@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,15 +26,17 @@ const (
 	// the user has authenticated successfully with the OIDC Provider. It's used for further
 	// resource requests from the provider.
 	AccessTokenCookieName = "access_token"
+	// RefreshTokenCookieName is the name of the cookie that holds the refresh token once
+	// the user has authenticated successfully with the OIDC Provider. It's used to refresh
+	// the id and access tokens once expired.
+	RefreshTokenCookieName = "refresh_token"
 	// AuthorizationTokenHeaderName is the name of the header that holds the bearer token
 	// used for token passthrough authentication.
 	AuthorizationTokenHeaderName = "Authorization"
-	// ScopeProfile is the "profile" scope
-	scopeProfile = "profile"
 	// ScopeEmail is the "email" scope
-	scopeEmail = "email"
+	ScopeEmail = "email"
 	// ScopeGroups is the "groups" scope
-	scopeGroups = "groups"
+	ScopeGroups = "groups"
 )
 
 // RegisterAuthServer registers the /callback route under a specified prefix.
@@ -52,7 +56,7 @@ func RegisterAuthServer(mux *http.ServeMux, prefix string, srv *AuthServer, logi
 	}
 
 	mux.Handle(prefix, srv.OAuth2Flow())
-	mux.Handle(prefix+"/callback", srv.Callback())
+	mux.HandleFunc(prefix+"/callback", srv.Callback)
 	mux.Handle(prefix+"/sign_in", middleware.Handle(srv.SignIn()))
 	mux.HandleFunc(prefix+"/userinfo", srv.UserInfo)
 	mux.Handle(prefix+"/logout", srv.Logout())
@@ -96,6 +100,12 @@ func (p *UserPrincipal) SetToken(t string) {
 // String returns the Principal ID and Groups as a string.
 func (p *UserPrincipal) String() string {
 	return fmt.Sprintf("id=%q groups=%v", p.ID, p.Groups)
+}
+
+// Hash returns a unique string using user id,token and groups.
+func (p *UserPrincipal) Hash() string {
+	hash := md5.Sum([]byte(fmt.Sprintf("%s/%s/%v", p.ID, p.Token(), p.Groups)))
+	return hex.EncodeToString(hash[:])
 }
 
 func (p *UserPrincipal) Valid() bool {
@@ -166,13 +176,13 @@ func WithAPIAuth(next http.Handler, srv *AuthServer, publicRoutes []string) http
 		case OIDC:
 			if srv.oidcEnabled() {
 				// OIDC tokens may be passed by token or cookie
-				multi.Getters = append(multi.Getters, NewJWTAuthorizationHeaderPrincipalGetter(srv.Log, srv.verifier()))
+				multi.Getters = append(multi.Getters, NewJWTAuthorizationHeaderPrincipalGetter(srv.Log, srv.verifier(), srv.OIDCConfig.ClaimsConfig))
 
 				if srv.oidcPassthroughEnabled() {
 					srv.Log.V(logger.LogLevelDebug).Info("JWT Token Passthrough Enabled")
 					multi.Getters = append(multi.Getters, NewJWTPassthroughCookiePrincipalGetter(srv.Log, srv.verifier(), IDTokenCookieName))
 				} else {
-					multi.Getters = append(multi.Getters, NewJWTCookiePrincipalGetter(srv.Log, srv.verifier(), IDTokenCookieName))
+					multi.Getters = append(multi.Getters, NewJWTCookiePrincipalGetter(srv.Log, srv.verifier(), IDTokenCookieName, srv.OIDCConfig.ClaimsConfig))
 				}
 			}
 
@@ -195,15 +205,20 @@ func WithAPIAuth(next http.Handler, srv *AuthServer, publicRoutes []string) http
 		}
 
 		principal, err := multi.Principal(r)
-		if err != nil {
-			srv.Log.Error(err, "failed to get principal")
+		if err != nil || principal == nil {
+			var refreshErr error
+			principal, refreshErr = srv.Refresh(rw, r)
+			if refreshErr != nil || principal == nil {
+				srv.Log.V(logger.LogLevelWarn).Info("refreshing token failed", "err", refreshErr, "principal", principal)
+				srv.Log.V(logger.LogLevelWarn).Info("Authentication failed", "err", err, "principal", principal)
+
+				JSONError(srv.Log, rw, "Authentication required", http.StatusUnauthorized)
+				return
+			}
+
+			srv.Log.Info("Successfully refreshed token", "principal", principal)
 		}
 
-		if principal == nil || err != nil {
-			srv.Log.V(logger.LogLevelWarn).Info("Authentication failed", "err", err, "principal", principal)
-			JSONError(srv.Log, rw, "Authentication required", http.StatusUnauthorized)
-			return
-		}
 		next.ServeHTTP(rw, r.Clone(WithPrincipal(r.Context(), principal)))
 	})
 }

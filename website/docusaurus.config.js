@@ -2,7 +2,7 @@ const versions = require("./versions.json");
 /** @type {import('@docusaurus/types').DocusaurusConfig} */
 module.exports = {
   title: "Weave GitOps",
-  tagline: "Weave GitOps Documentation",
+  tagline: "The official Flux expansion pack.",
   url: "https://docs.gitops.weave.works",
   baseUrl: "/",
   onBrokenLinks: "throw",
@@ -43,15 +43,25 @@ module.exports = {
       items: [
         {
           type: "doc",
-          docId: "installation",
+          docId: "intro",
           position: "left",
-          label: "Installation",
+          label: "Docs",
         },
         {
-          type: "doc",
-          docId: "getting-started",
-          position: "left",
-          label: "Getting Started",
+          type: 'docSidebar',
+          position: 'left',
+          label: 'Reference',
+          sidebarId: 'ref',
+        },
+        {
+          to: 'help-and-support',
+          label: 'Help & Support',
+          position: 'left',
+        },
+        {
+          to: 'feedback-and-telemetry',
+          label: 'Feedback & Telemetry',
+          position: 'left',
         },
         {
           to: 'security',
@@ -82,7 +92,48 @@ module.exports = {
             },
           ],
         },
+        {
+            title: "Community",
+            items: [
+                {
+                label: "GitHub",
+                href: "https://github.com/weaveworks/weave-gitops",
+                },
+            ],
+        },
+        {
+            title: 'Follow us',
+            items: [
+              {
+                label: 'Facebook',
+                href: 'https://www.facebook.com/WeaveworksInc/',
+              },
+              {
+                label: 'LinkedIn',
+                href: 'https://www.linkedin.com/company/weaveworks',
+              },
+              {
+                label: 'Twitter',
+                href: 'https://twitter.com/weaveworks',
+              },
+              {
+                label: 'Slack',
+                href: 'https://slack.weave.works/',
+              },
+              {
+                label: 'Youtube',
+                href: 'https://www.youtube.com/c/WeaveWorksInc',
+              },
+            ],
+        },
       ],
+      logo: {
+        alt: 'Weaveworks Logo',
+        src: 'img/weave-logo.png',
+        href: 'https://weave.works',
+        width: 35,
+        height: 35,
+      },
       copyright: `Copyright © ${new Date().getFullYear()} Weaveworks`,
     },
     algolia: {
@@ -98,6 +149,12 @@ module.exports = {
       // },
     },
   },
+  scripts: [
+    {
+      src: 'https://kit.fontawesome.com/73855c6ec3.js',
+      async: true,
+    },
+  ],
   presets: [
     [
       "@docusaurus/preset-classic",

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -27,7 +29,23 @@ const (
 	FeatureFlagOIDCAuth        string = "OIDC_AUTH"
 	FeatureFlagOIDCPassthrough string = "WEAVE_GITOPS_FEATURE_OIDC_AUTH_PASSTHROUGH"
 	FeatureFlagSet             string = "true"
+
+	// ClaimUsername is the default claim for getting the user from OIDC for
+	// auth
+	ClaimUsername string = "email"
+
+	// ClaimGroups is the default claim for getting the groups from OIDC for
+	// auth
+	ClaimGroups string = "groups"
 )
+
+// DefaultScopes is the set of scopes that we require.
+var DefaultScopes = []string{
+	oidc.ScopeOpenID,
+	oidc.ScopeOfflineAccess,
+	ScopeEmail,
+	ScopeGroups,
+}
 
 // OIDCConfig is used to configure an AuthServer to interact with
 // an OIDC issuer.
@@ -37,6 +55,8 @@ type OIDCConfig struct {
 	ClientSecret  string
 	RedirectURL   string
 	TokenDuration time.Duration
+	Scopes        []string
+	ClaimsConfig  *ClaimsConfig
 }
 
 // This is only used if the OIDCConfig doesn't have a TokenDuration set. If
@@ -49,7 +69,7 @@ type AuthConfig struct {
 	client              *http.Client
 	kubernetesClient    ctrlclient.Client
 	tokenSignerVerifier TokenSignerVerifier
-	config              OIDCConfig
+	OIDCConfig          OIDCConfig
 	authMethods         map[AuthMethod]bool
 	namespace           string
 }
@@ -69,9 +89,23 @@ type LoginRequest struct {
 // UserInfo represents the response returned from the user info handler.
 type UserInfo struct {
 	Email  string   `json:"email"`
+	ID     string   `json:"id"`
 	Groups []string `json:"groups"`
 }
 
+// NewOIDCConfigFromSecret takes a corev1.Secret and extracts the fields.
+//
+// The following keys are required in the secret:
+//   - issuerURL
+//   - clientID
+//   - clientSecret
+//   - redirectURL
+//
+// The following keys are optional
+// - tokenDuration - defaults to 1 hour.
+// - claimUsername - defaults to "email"
+// - claimGroups - defaults to "groups"
+// - customScopes - defaults to "openid","offline_access","email","groups"
 func NewOIDCConfigFromSecret(secret corev1.Secret) OIDCConfig {
 	cfg := OIDCConfig{
 		IssuerURL:    string(secret.Data["issuerURL"]),
@@ -79,6 +113,7 @@ func NewOIDCConfigFromSecret(secret corev1.Secret) OIDCConfig {
 		ClientSecret: string(secret.Data["clientSecret"]),
 		RedirectURL:  string(secret.Data["redirectURL"]),
 	}
+	cfg.ClaimsConfig = claimsConfigFromSecret(secret)
 
 	tokenDuration, err := time.ParseDuration(string(secret.Data["tokenDuration"]))
 	if err != nil {
@@ -87,7 +122,48 @@ func NewOIDCConfigFromSecret(secret corev1.Secret) OIDCConfig {
 
 	cfg.TokenDuration = tokenDuration
 
+	scopes := splitAndTrim(string(secret.Data["customScopes"]))
+	if len(scopes) == 0 {
+		scopes = DefaultScopes
+	}
+
+	cfg.Scopes = scopes
+
 	return cfg
+}
+
+func splitAndTrim(s string) []string {
+	result := []string{}
+	splits := strings.Split(s, ",")
+
+	for _, s := range splits {
+		if v := strings.TrimSpace(s); v != "" {
+			result = append(result, v)
+		}
+	}
+
+	return result
+}
+
+func claimsConfigFromSecret(secret corev1.Secret) *ClaimsConfig {
+	claimUsername, ok := secret.Data["claimUsername"]
+	if !ok {
+		claimUsername = []byte(ClaimUsername)
+	}
+
+	claimGroups, ok := secret.Data["claimGroups"]
+	if !ok {
+		claimGroups = []byte(ClaimGroups)
+	}
+
+	if len(claimUsername) > 0 && len(claimGroups) > 0 {
+		return &ClaimsConfig{
+			Username: string(claimUsername),
+			Groups:   string(claimGroups),
+		}
+	}
+
+	return nil
 }
 
 func NewAuthServerConfig(log logr.Logger, oidcCfg OIDCConfig, kubernetesClient ctrlclient.Client, tsv TokenSignerVerifier, namespace string, authMethods map[AuthMethod]bool) (AuthConfig, error) {
@@ -106,7 +182,7 @@ func NewAuthServerConfig(log logr.Logger, oidcCfg OIDCConfig, kubernetesClient c
 		client:              http.DefaultClient,
 		kubernetesClient:    kubernetesClient,
 		tokenSignerVerifier: tsv,
-		config:              oidcCfg,
+		OIDCConfig:          oidcCfg,
 		namespace:           namespace,
 		authMethods:         authMethods,
 	}, nil
@@ -132,12 +208,12 @@ func NewAuthServer(ctx context.Context, cfg AuthConfig) (*AuthServer, error) {
 
 	var provider *oidc.Provider
 
-	if cfg.config.IssuerURL == "" {
+	if cfg.OIDCConfig.IssuerURL == "" {
 		featureflags.Set(FeatureFlagOIDCAuth, "false")
 	} else if cfg.authMethods[OIDC] {
 		var err error
 
-		provider, err = oidc.NewProvider(ctx, cfg.config.IssuerURL)
+		provider, err = oidc.NewProvider(ctx, cfg.OIDCConfig.IssuerURL)
 		if err != nil {
 			return nil, fmt.Errorf("could not create provider: %w", err)
 		}
@@ -154,7 +230,7 @@ func NewAuthServer(ctx context.Context, cfg AuthConfig) (*AuthServer, error) {
 // SetRedirectURL is used to set the redirect URL. This is meant to be used
 // in unit tests only.
 func (s *AuthServer) SetRedirectURL(url string) {
-	s.config.RedirectURL = url
+	s.OIDCConfig.RedirectURL = url
 }
 
 func (s *AuthServer) oidcEnabled() bool {
@@ -166,31 +242,24 @@ func (s *AuthServer) oidcPassthroughEnabled() bool {
 }
 
 func (s *AuthServer) verifier() *oidc.IDTokenVerifier {
-	return s.provider.Verifier(&oidc.Config{ClientID: s.config.ClientID})
+	return s.provider.Verifier(&oidc.Config{ClientID: s.OIDCConfig.ClientID})
 }
 
 func (s *AuthServer) oauth2Config(scopes []string) *oauth2.Config {
+	requestScopes := []string{}
 	// Ensure "openid" scope is always present.
 	if !contains(scopes, oidc.ScopeOpenID) {
-		scopes = append(scopes, oidc.ScopeOpenID)
+		requestScopes = append(requestScopes, oidc.ScopeOpenID)
 	}
 
-	// Request "email" scope to get user's email address.
-	if !contains(scopes, scopeEmail) {
-		scopes = append(scopes, scopeEmail)
-	}
-
-	// Request "groups" scope to get user's groups.
-	if !contains(scopes, scopeGroups) {
-		scopes = append(scopes, scopeGroups)
-	}
+	requestScopes = append(requestScopes, scopes...)
 
 	return &oauth2.Config{
-		ClientID:     s.config.ClientID,
-		ClientSecret: s.config.ClientSecret,
+		ClientID:     s.OIDCConfig.ClientID,
+		ClientSecret: s.OIDCConfig.ClientSecret,
+		RedirectURL:  s.OIDCConfig.RedirectURL,
 		Endpoint:     s.provider.Endpoint(),
-		RedirectURL:  s.config.RedirectURL,
-		Scopes:       scopes,
+		Scopes:       requestScopes,
 	}
 }
 
@@ -205,97 +274,99 @@ func (s *AuthServer) OAuth2Flow() http.HandlerFunc {
 	}
 }
 
-func (s *AuthServer) Callback() http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		var (
-			token *oauth2.Token
-			state SessionState
-		)
+func (s *AuthServer) Callback(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		rw.Header().Add("Allow", "GET")
+		rw.WriteHeader(http.StatusMethodNotAllowed)
 
-		if r.Method != http.MethodGet {
-			rw.Header().Add("Allow", "GET")
-			rw.WriteHeader(http.StatusMethodNotAllowed)
-
-			return
-		}
-
-		ctx := oidc.ClientContext(r.Context(), s.client)
-
-		// Authorization redirect callback from OAuth2 auth flow.
-		if errorCode := r.FormValue("error"); errorCode != "" {
-			s.Log.Info("authz redirect callback failed", "error", errorCode, "error_description", r.FormValue("error_description"))
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		code := r.FormValue("code")
-		if code == "" {
-			s.Log.Info("code value was empty")
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		cookie, err := r.Cookie(StateCookieName)
-		if err != nil {
-			s.Log.Error(err, "cookie was not found in the request", "cookie", StateCookieName)
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		if state := r.FormValue("state"); state != cookie.Value {
-			s.Log.Info("cookie value does not match state form value")
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		b, err := base64.StdEncoding.DecodeString(cookie.Value)
-		if err != nil {
-			s.Log.Error(err, "cannot base64 decode cookie", "cookie", StateCookieName, "cookie_value", cookie.Value)
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		if err := json.Unmarshal(b, &state); err != nil {
-			s.Log.Error(err, "failed to unmarshal state to JSON", "state", string(b))
-			rw.WriteHeader(http.StatusBadRequest)
-
-			return
-		}
-
-		token, err = s.oauth2Config(nil).Exchange(ctx, code)
-		if err != nil {
-			s.Log.Error(err, "failed to exchange auth code for token", "code", code)
-			rw.WriteHeader(http.StatusInternalServerError)
-
-			return
-		}
-
-		rawIDToken, ok := token.Extra("id_token").(string)
-		if !ok {
-			JSONError(s.Log, rw, "no id_token in token response", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = s.verifier().Verify(r.Context(), rawIDToken)
-		if err != nil {
-			JSONError(s.Log, rw, fmt.Sprintf("failed to verify ID token: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Issue ID token cookie
-		http.SetCookie(rw, s.createCookie(IDTokenCookieName, rawIDToken))
-		http.SetCookie(rw, s.createCookie(AccessTokenCookieName, token.AccessToken))
-
-		// Clear state cookie
-		http.SetCookie(rw, s.clearCookie(StateCookieName))
-
-		http.Redirect(rw, r, state.ReturnURL, http.StatusSeeOther)
+		return
 	}
+
+	ctx := oidc.ClientContext(r.Context(), s.client)
+
+	// Authorization redirect callback from OAuth2 auth flow.
+	if errorCode := r.FormValue("error"); errorCode != "" {
+		s.Log.Info("authz redirect callback failed", "error", errorCode, "error_description", r.FormValue("error_description"))
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	code := r.FormValue("code")
+	if code == "" {
+		s.Log.Info("code value was empty")
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	cookie, err := r.Cookie(StateCookieName)
+	if err != nil {
+		s.Log.Error(err, "cookie was not found in the request", "cookie", StateCookieName)
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	if state := r.FormValue("state"); state != cookie.Value {
+		s.Log.Info("cookie value does not match state form value")
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	b, err := base64.StdEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		s.Log.Error(err, "cannot base64 decode cookie", "cookie", StateCookieName, "cookie_value", cookie.Value)
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	var state SessionState
+	if err := json.Unmarshal(b, &state); err != nil {
+		s.Log.Error(err, "failed to unmarshal state to JSON", "state", string(b))
+		rw.WriteHeader(http.StatusBadRequest)
+
+		return
+	}
+
+	token, err := s.oauth2Config(nil).Exchange(ctx, code)
+	if err != nil {
+		s.Log.Error(err, "failed to exchange auth code for token", "code", code)
+		rw.WriteHeader(http.StatusInternalServerError)
+
+		return
+	}
+
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		JSONError(s.Log, rw, "no id_token in token response", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = s.verifier().Verify(r.Context(), rawIDToken)
+	if err != nil {
+		JSONError(s.Log, rw, fmt.Sprintf("failed to verify ID token: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	s.setCookies(rw, rawIDToken, token.AccessToken, token.RefreshToken)
+	// Clear state cookie
+	http.SetCookie(rw, s.clearCookie(StateCookieName))
+
+	http.Redirect(rw, r, state.ReturnURL, http.StatusSeeOther)
+}
+
+func (s *AuthServer) setCookies(rw http.ResponseWriter, idToken, accessToken, refreshToken string) {
+	// Issue ID token cookie
+	baseExpiry := s.cookieExpiryTime()
+	http.SetCookie(rw, s.createCookie(IDTokenCookieName, idToken, baseExpiry))
+	http.SetCookie(rw, s.createCookie(AccessTokenCookieName, accessToken, baseExpiry))
+	// Make the Refresh token expire after the ID token so that we have a
+	// token we can refresh with.
+
+	http.SetCookie(rw, s.createCookie(RefreshTokenCookieName, refreshToken, baseExpiry.Add(time.Hour)))
 }
 
 func (s *AuthServer) SignIn() http.HandlerFunc {
@@ -351,9 +422,13 @@ func (s *AuthServer) SignIn() http.HandlerFunc {
 			return
 		}
 
-		http.SetCookie(rw, s.createCookie(IDTokenCookieName, signed))
+		http.SetCookie(rw, s.createCookie(IDTokenCookieName, signed, s.cookieExpiryTime()))
 		rw.WriteHeader(http.StatusOK)
 	}
+}
+
+func (s *AuthServer) cookieExpiryTime() time.Time {
+	return time.Now().UTC().Add(s.OIDCConfig.TokenDuration)
 }
 
 // UserInfo inspects the cookie and attempts to verify it as an admin token. If successful,
@@ -368,15 +443,18 @@ func (s *AuthServer) UserInfo(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := findAuthCookie(r)
+	c, err := r.Cookie(IDTokenCookieName)
 	if err != nil {
+		s.Log.Error(err, "Failed to get cookie from request")
 		rw.WriteHeader(http.StatusBadRequest)
+
 		return
 	}
 
 	claims, err := s.tokenSignerVerifier.Verify(c.Value)
 	if err == nil {
 		ui := UserInfo{
+			ID:    claims.Subject,
 			Email: claims.Subject,
 		}
 		toJSON(rw, ui, s.Log)
@@ -391,32 +469,58 @@ func (s *AuthServer) UserInfo(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := s.provider.UserInfo(r.Context(), oauth2.StaticTokenSource(&oauth2.Token{
-		AccessToken: c.Value,
-	}))
+	info, err := s.verifier().Verify(r.Context(), c.Value)
 	if err != nil {
-		s.Log.Error(err, "failed to query userinfo")
+		s.Log.Error(err, "failed to parse user id token")
+		JSONError(s.Log, rw, fmt.Sprintf("failed to parse id token: %v", err), http.StatusUnauthorized)
+
+		return
+	}
+
+	userPrincipal, err := s.OIDCConfig.ClaimsConfig.PrincipalFromClaims(info)
+	if err != nil {
+		s.Log.Error(err, "failed to parse user info")
 		JSONError(s.Log, rw, fmt.Sprintf("failed to query user info endpoint: %v", err), http.StatusUnauthorized)
 
 		return
 	}
 
-	var userPrincipal UserPrincipal
-
-	// Extract custom claims
-	if err := info.Claims(&userPrincipal); err != nil {
-		s.Log.Error(err, "failed to decode user claims")
-		JSONError(s.Log, rw, fmt.Sprintf("failed to decode user claims: %v", err), http.StatusUnauthorized)
-
-		return
-	}
-
 	ui := UserInfo{
-		Email:  info.Email,
+		ID:     userPrincipal.ID,
+		Email:  userPrincipal.ID,
 		Groups: userPrincipal.Groups,
 	}
 
 	toJSON(rw, ui, s.Log)
+}
+
+// Refresh is used to refresh the access token and id token. It updates the cookies on the response
+// with the new tokens. It returns the new user principal.
+func (s *AuthServer) Refresh(rw http.ResponseWriter, r *http.Request) (*UserPrincipal, error) {
+	ctx := oidc.ClientContext(r.Context(), s.client)
+
+	refreshTokenCookie, err := r.Cookie(RefreshTokenCookieName)
+	if err != nil {
+		return nil, errors.New("couldn't fetch refresh token from cookie")
+	}
+
+	token, err := s.oauth2Config(nil).TokenSource(
+		ctx,
+		&oauth2.Token{
+			RefreshToken: refreshTokenCookie.Value,
+		}).Token()
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		return nil, errors.New("no id_token in token response")
+	}
+
+	s.setCookies(rw, rawIDToken, token.AccessToken, token.RefreshToken)
+
+	return parseJWTToken(ctx, s.verifier(), rawIDToken, s.OIDCConfig.ClaimsConfig)
 }
 
 func toJSON(rw http.ResponseWriter, ui UserInfo, log logr.Logger) {
@@ -456,13 +560,10 @@ func (s *AuthServer) startAuthFlow(rw http.ResponseWriter, r *http.Request) {
 
 	state := base64.StdEncoding.EncodeToString(b)
 
-	var scopes []string
-	// "openid", "email" and "groups" scopes added by default
-	scopes = append(scopes, scopeProfile)
-	authCodeURL := s.oauth2Config(scopes).AuthCodeURL(state)
+	authCodeURL := s.oauth2Config(s.OIDCConfig.Scopes).AuthCodeURL(state)
 
 	// Issue state cookie
-	http.SetCookie(rw, s.createCookie(StateCookieName, state))
+	http.SetCookie(rw, s.createCookie(StateCookieName, state, s.cookieExpiryTime()))
 
 	http.Redirect(rw, r, authCodeURL, http.StatusSeeOther)
 }
@@ -482,12 +583,12 @@ func (s *AuthServer) Logout() http.HandlerFunc {
 	}
 }
 
-func (s *AuthServer) createCookie(name, value string) *http.Cookie {
+func (s *AuthServer) createCookie(name, value string, expires time.Time) *http.Cookie {
 	cookie := &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
-		Expires:  time.Now().UTC().Add(s.config.TokenDuration),
+		Expires:  expires,
 		HttpOnly: true,
 		Secure:   false,
 	}
@@ -546,19 +647,4 @@ func JSONError(log logr.Logger, w http.ResponseWriter, errStr string, code int) 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Error(err, "failed encoding error message", "message", errStr)
 	}
-}
-
-// try to retrieve the access token obtained through OIDC first and, if that doesn't exist,
-// fall back to the ID token issued by authenticating using the cluster-user-auth Secret. This way,
-// users can use both ways to log into weave-gitops.
-func findAuthCookie(req *http.Request) (*http.Cookie, error) {
-	cookieNames := []string{AccessTokenCookieName, IDTokenCookieName}
-	for _, name := range cookieNames {
-		c, err := req.Cookie(name)
-		if err == nil {
-			return c, nil
-		}
-	}
-
-	return nil, http.ErrNoCookie
 }

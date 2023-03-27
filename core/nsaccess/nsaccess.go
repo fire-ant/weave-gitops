@@ -9,9 +9,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/kubernetes"
 	typedauth "k8s.io/client-go/kubernetes/typed/authorization/v1"
-	"k8s.io/client-go/rest"
 )
 
 //go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 -generate
@@ -55,7 +53,7 @@ var DefautltWegoAppRules = []rbacv1.PolicyRule{
 //counterfeiter:generate . Checker
 type Checker interface {
 	// FilterAccessibleNamespaces returns a filtered list of namespaces to which a user has access to
-	FilterAccessibleNamespaces(ctx context.Context, cfg *rest.Config, namespaces []corev1.Namespace) ([]corev1.Namespace, error)
+	FilterAccessibleNamespaces(ctx context.Context, auth typedauth.AuthorizationV1Interface, namespaces []corev1.Namespace) ([]corev1.Namespace, error)
 }
 
 type simpleChecker struct {
@@ -66,11 +64,11 @@ func NewChecker(rules []rbacv1.PolicyRule) Checker {
 	return simpleChecker{rules: rules}
 }
 
-func (sc simpleChecker) FilterAccessibleNamespaces(ctx context.Context, cfg *rest.Config, namespaces []corev1.Namespace) ([]corev1.Namespace, error) {
+func (sc simpleChecker) FilterAccessibleNamespaces(ctx context.Context, auth typedauth.AuthorizationV1Interface, namespaces []corev1.Namespace) ([]corev1.Namespace, error) {
 	result := []corev1.Namespace{}
 
 	for _, ns := range namespaces {
-		ok, err := userCanUseNamespace(ctx, cfg, ns, sc.rules)
+		ok, err := userCanUseNamespace(ctx, auth, ns, sc.rules)
 		if err != nil {
 			return nil, fmt.Errorf("user namespace access: %w", err)
 		}
@@ -83,12 +81,7 @@ func (sc simpleChecker) FilterAccessibleNamespaces(ctx context.Context, cfg *res
 	return result, nil
 }
 
-func userCanUseNamespace(ctx context.Context, cfg *rest.Config, ns corev1.Namespace, rules []rbacv1.PolicyRule) (bool, error) {
-	auth, err := newAuthClient(cfg)
-	if err != nil {
-		return false, err
-	}
-
+func userCanUseNamespace(ctx context.Context, auth typedauth.AuthorizationV1Interface, ns corev1.Namespace, rules []rbacv1.PolicyRule) (bool, error) {
 	sar := &authorizationv1.SelfSubjectRulesReview{
 		Spec: authorizationv1.SelfSubjectRulesReviewSpec{
 			Namespace: ns.Name,
@@ -100,7 +93,7 @@ func userCanUseNamespace(ctx context.Context, cfg *rest.Config, ns corev1.Namesp
 		return false, err
 	}
 
-	return hasAllRules(authRes.Status, rules, ns.Name), nil
+	return hasAllRules(authRes.Status, rules), nil
 }
 
 var allK8sVerbs = []string{"create", "get", "list", "watch", "patch", "delete", "deletecollection"}
@@ -165,7 +158,7 @@ func allAPIGroups(rules []rbacv1.PolicyRule) []string {
 //
 // Secrets don't exist in "apps" according to k8s,
 // but the "index checker" that checks this struct does not mind.
-func hasAllRules(status authorizationv1.SubjectRulesReviewStatus, rules []rbacv1.PolicyRule, ns string) bool {
+func hasAllRules(status authorizationv1.SubjectRulesReviewStatus, rules []rbacv1.PolicyRule) bool {
 	derivedAccess := map[string]map[string]map[string]bool{}
 
 	allResourcesInRules := allResources(rules)
@@ -251,13 +244,4 @@ func containsWildcard(permissions []string) bool {
 	}
 
 	return false
-}
-
-func newAuthClient(cfg *rest.Config) (typedauth.AuthorizationV1Interface, error) {
-	cs, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("making clientset: %w", err)
-	}
-
-	return cs.AuthorizationV1(), nil
 }

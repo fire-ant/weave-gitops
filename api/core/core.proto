@@ -25,7 +25,7 @@ service Core {
     */
     rpc GetObject(GetObjectRequest) returns (GetObjectResponse) {
         option (google.api.http) = {
-            get : "/v1/object/{name}"
+            get: "/v1/object/{name}"
         };
     }
 
@@ -35,7 +35,8 @@ service Core {
     */
     rpc ListObjects(ListObjectsRequest) returns (ListObjectsResponse) {
         option (google.api.http) = {
-            get : "/v1/objects"
+            post: "/v1/objects"
+            body: "*"
         };
     }
 
@@ -45,14 +46,14 @@ service Core {
      */
     rpc ListFluxRuntimeObjects(ListFluxRuntimeObjectsRequest) returns (ListFluxRuntimeObjectsResponse) {
         option (google.api.http) = {
-          get : "/v1/flux_runtime_objects"
+            get: "/v1/flux_runtime_objects"
         };
     }
 
     rpc ListFluxCrds(ListFluxCrdsRequest) returns (ListFluxCrdsResponse) {
         option (google.api.http) = {
-            get : "/v1/flux_crds"
-          };
+            get: "/v1/flux_crds"
+        };
     }
 
     /**
@@ -61,7 +62,7 @@ service Core {
     */
     rpc GetReconciledObjects(GetReconciledObjectsRequest) returns (GetReconciledObjectsResponse) {
         option (google.api.http) = {
-            post : "/v1/reconciled_objects"
+            post: "/v1/reconciled_objects"
             body: "*"
         };
     };
@@ -72,7 +73,7 @@ service Core {
     */
     rpc GetChildObjects(GetChildObjectsRequest) returns (GetChildObjectsResponse) {
         option (google.api.http) = {
-            post : "/v1/child_objects"
+            post: "/v1/child_objects"
             body: "*"
         };
     };
@@ -128,7 +129,7 @@ service Core {
     */
     rpc GetFeatureFlags(GetFeatureFlagsRequest) returns (GetFeatureFlagsResponse) {
         option (google.api.http) = {
-            get : "/v1/featureflags"
+            get: "/v1/featureflags"
         };
     }
 
@@ -141,7 +142,47 @@ service Core {
             body: "*"
         };
     }
+
+    /*
+     * GetSessionLogs returns the logs for a given session
+     */
+    rpc GetSessionLogs(GetSessionLogsRequest) returns (GetSessionLogsResponse) {
+        option (google.api.http) = {
+            post: "/v1/session_logs"
+            body: "*"
+        };
+    }
+
+    /**
+    * IsCRDAvailable returns with a hashmap where the keys are the names of
+    * the clusters, and the value is a boolean indicating whether given CRD is
+    * installed or not on that cluster.
+    */
+    rpc IsCRDAvailable(IsCRDAvailableRequest) returns (IsCRDAvailableResponse) {
+        option (google.api.http) = {
+            get : "/v1/crd/is_available",
+        };
+    }
+
+    rpc GetInventory(GetInventoryRequest) returns (GetInventoryResponse) {
+        option (google.api.http) = {
+            get : "/v1/inventory",
+        };
+    }
 }
+
+message GetInventoryRequest {
+    string kind = 1;
+    string name = 2;
+    string namespace = 3;
+    string clusterName = 4;
+    bool withChildren = 5;
+}
+
+message GetInventoryResponse {
+    repeated InventoryEntry entries = 1;
+}
+
 
 message Pagination {
     int32 pageSize = 1;
@@ -188,6 +229,7 @@ message ListObjectsRequest {
     string namespace   = 1;
     string kind        = 2;
     string clusterName = 3;
+    map<string, string> labels = 4;
 }
 
 message ListObjectsResponse {
@@ -269,4 +311,35 @@ message ToggleSuspendResourceRequest {
 }
 
 message ToggleSuspendResourceResponse {
+}
+
+message GetSessionLogsRequest {
+    string sessionNamespace = 1;
+    string sessionId        = 2;
+    string token            = 3;
+    string logSourceFilter  = 4;
+    string logLevelFilter   = 5;
+}
+
+message LogEntry {
+    string timestamp  = 1;
+    string source     = 2;
+    string level      = 3;
+    string message    = 4;
+    string sortingKey = 5;
+}
+
+message GetSessionLogsResponse {
+    repeated LogEntry logs       = 1;
+    string            nextToken  = 2;
+    string            error      = 3;
+    repeated string   logSources = 4;
+}
+
+message IsCRDAvailableRequest {
+    string name = 1;
+}
+
+message IsCRDAvailableResponse {
+    map<string,bool> clusters = 1;
 }

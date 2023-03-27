@@ -44,6 +44,7 @@ const BaseURI = "https://weave.works/api"
 var k8sEnv *K8sTestEnv
 
 type K8sTestEnv struct {
+	Env        *envtest.Environment
 	Client     client.Client
 	DynClient  dynamic.Interface
 	RestMapper *restmapper.DeferredDiscoveryRESTMapper
@@ -61,7 +62,8 @@ func StartK8sTestEnvironment(crdPaths []string) (*K8sTestEnv, error) {
 	}
 
 	testEnv := &envtest.Environment{
-		CRDDirectoryPaths: crdPaths,
+		CRDDirectoryPaths:     crdPaths,
+		ErrorIfCRDPathMissing: false,
 		CRDInstallOptions: envtest.CRDInstallOptions{
 			CleanUpAfterUse: false,
 		},
@@ -96,8 +98,10 @@ func StartK8sTestEnvironment(crdPaths []string) (*K8sTestEnv, error) {
 		return nil, fmt.Errorf("could not create controller manager: %w", err)
 	}
 
+	ctrlCtx, ctrlCancel := context.WithCancel(context.Background())
+
 	go func() {
-		err := k8sManager.Start(ctrl.SetupSignalHandler())
+		err := k8sManager.Start(ctrlCtx)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -105,6 +109,7 @@ func StartK8sTestEnvironment(crdPaths []string) (*K8sTestEnv, error) {
 
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
+		ctrlCancel()
 		return nil, fmt.Errorf("failed to initialize discovery client: %s", err)
 	}
 
@@ -112,15 +117,18 @@ func StartK8sTestEnvironment(crdPaths []string) (*K8sTestEnv, error) {
 
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
+		ctrlCancel()
 		return nil, fmt.Errorf("failed to initialize dynamic client: %s", err)
 	}
 
 	k8sEnv = &K8sTestEnv{
+		Env:        testEnv,
 		Client:     k8sManager.GetClient(),
 		DynClient:  dyn,
 		RestMapper: mapper,
 		Rest:       cfg,
 		Stop: func() {
+			ctrlCancel()
 			err := testEnv.Stop()
 			if err != nil {
 				log.Fatal(err.Error())
@@ -171,7 +179,7 @@ func MakeRSAPrivateKey(t *testing.T) *rsa.PrivateKey {
 }
 
 // MakeJWToken creates and signs a token with the provided key.
-func MakeJWToken(t *testing.T, key *rsa.PrivateKey, email string) string {
+func MakeJWToken(t *testing.T, key *rsa.PrivateKey, email string, opts ...func(map[string]any)) string {
 	t.Helper()
 
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key}, nil)
@@ -187,19 +195,19 @@ func MakeJWToken(t *testing.T, key *rsa.PrivateKey, email string) string {
 		Audience:  jwt.Audience{"test-service"},
 		NotBefore: jwt.NewNumericDate(notBefore),
 		IssuedAt:  jwt.NewNumericDate(notBefore),
-		Expiry:    jwt.NewNumericDate(notBefore.Add(time.Duration(maxAgeSecondsAuthCookie))),
+		Expiry:    jwt.NewNumericDate(notBefore.Add(maxAgeSecondsAuthCookie)),
 	}
-	githubClaims := struct {
-		Groups            []string `json:"groups"`
-		Email             string   `json:"email"`
-		PreferredUsername string   `json:"preferred_username"`
-	}{
-		[]string{"testing"},
-		email,
-		"example",
+	extraClaims := map[string]any{
+		"groups":             []string{"testing"},
+		"email":              email,
+		"preferred_username": "testing",
 	}
 
-	signed, err := jwt.Signed(signer).Claims(claims).Claims(githubClaims).CompactSerialize()
+	for _, opt := range opts {
+		opt(extraClaims)
+	}
+
+	signed, err := jwt.Signed(signer).Claims(claims).Claims(extraClaims).CompactSerialize()
 	if err != nil {
 		t.Fatal(err)
 	}

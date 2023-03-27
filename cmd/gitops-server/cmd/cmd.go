@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/weaveworks/weave-gitops/cmd/gitops/cmderrors"
 	"github.com/weaveworks/weave-gitops/core/clustersmngr"
+	"github.com/weaveworks/weave-gitops/core/clustersmngr/cluster"
 	"github.com/weaveworks/weave-gitops/core/clustersmngr/fetcher"
 	"github.com/weaveworks/weave-gitops/core/logger"
 	"github.com/weaveworks/weave-gitops/core/nsaccess"
@@ -35,6 +36,7 @@ import (
 	"github.com/weaveworks/weave-gitops/pkg/server"
 	"github.com/weaveworks/weave-gitops/pkg/server/auth"
 	"github.com/weaveworks/weave-gitops/pkg/server/middleware"
+	"github.com/weaveworks/weave-gitops/pkg/telemetry"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -83,7 +85,11 @@ func NewCommand() *cobra.Command {
 		RunE:  runCmd,
 	}
 
-	options = Options{}
+	options = Options{
+		OIDC: auth.OIDCConfig{
+			ClaimsConfig: &auth.ClaimsConfig{},
+		},
+	}
 
 	// System config
 	cmd.Flags().StringVar(&options.Host, "host", server.DefaultHost, "UI host")
@@ -105,6 +111,9 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.OIDC.IssuerURL, "oidc-issuer-url", "", "The URL of the OpenID Connect issuer")
 	cmd.Flags().StringVar(&options.OIDC.RedirectURL, "oidc-redirect-url", "", "The OAuth2 redirect URL")
 	cmd.Flags().DurationVar(&options.OIDC.TokenDuration, "oidc-token-duration", time.Hour, "The duration of the ID token. It should be set in the format: number + time unit (s,m,h) e.g., 20m")
+	cmd.Flags().StringVar(&options.OIDC.ClaimsConfig.Username, "oidc-username-claim", auth.ClaimUsername, "JWT claim to use as the user name. By default email, which is expected to be a unique identifier of the end user. Admins can choose other claims, such as sub or name, depending on their provider")
+	cmd.Flags().StringVar(&options.OIDC.ClaimsConfig.Groups, "oidc-groups-claim", auth.ClaimGroups, "JWT claim to use as the user's group. If the claim is present it must be an array of strings")
+	cmd.Flags().StringSliceVar(&options.OIDC.Scopes, "custom-oidc-scopes", auth.DefaultScopes, "Customise the requested scopes for then OIDC authentication flow - openid will always be requested")
 	// Metrics
 	cmd.Flags().BoolVar(&options.EnableMetrics, "enable-metrics", false, "Starts the metrics listener")
 	cmd.Flags().StringVar(&options.MetricsAddress, "metrics-address", ":2112", "If the metrics listener is enabled, bind to this address")
@@ -177,26 +186,38 @@ func runCmd(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	fetcher := fetcher.NewSingleClusterFetcher(rest)
-
-	clientsFactory := clustersmngr.CachedClientFactory
-	if !options.UseK8sCachedClients {
-		clientsFactory = clustersmngr.ClientFactory
+	cl, err := cluster.NewSingleCluster(cluster.DefaultCluster, rest, scheme, cluster.DefaultKubeConfigOptions...)
+	if err != nil {
+		return fmt.Errorf("failed to create cluster client; %w", err)
 	}
 
-	clustersManager := clustersmngr.NewClustersManager(fetcher, nsaccess.NewChecker(nsaccess.DefautltWegoAppRules), log, scheme, clientsFactory, clustersmngr.DefaultKubeConfigOptions)
+	if featureflags.Get("WEAVE_GITOPS_FEATURE_TELEMETRY") == "true" {
+		err := telemetry.InitTelemetry(ctx, cl)
+		if err != nil {
+			// If there's an error turning on telemetry, that's not a
+			// thing that should interrupt anything else
+			log.Info("Couldn't enable telemetry", "error", err)
+		}
+	}
+
+	log.Info("Using cached clients", "enabled", options.UseK8sCachedClients)
+
+	if options.UseK8sCachedClients {
+		cl = cluster.NewDelegatingCacheCluster(cl, rest, scheme)
+	}
+
+	fetcher := fetcher.NewSingleClusterFetcher(cl)
+
+	clustersManager := clustersmngr.NewClustersManager([]clustersmngr.ClusterFetcher{fetcher}, nsaccess.NewChecker(nsaccess.DefautltWegoAppRules), log)
 	clustersManager.Start(ctx)
 
-	coreConfig := core.NewCoreConfig(log, rest, clusterName, clustersManager)
-
-	appConfig, err := server.DefaultApplicationsConfig(log)
+	coreConfig, err := core.NewCoreConfig(log, rest, clusterName, clustersManager)
 	if err != nil {
-		return fmt.Errorf("could not create http client: %w", err)
+		return fmt.Errorf("could not create core config: %w", err)
 	}
 
 	appAndProfilesHandlers, err := server.NewHandlers(ctx, log,
 		&server.Config{
-			AppConfig:        appConfig,
 			CoreServerConfig: coreConfig,
 			AuthServer:       authServer,
 		},
@@ -278,9 +299,7 @@ func runCmd(cmd *cobra.Command, args []string) error {
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
-	defer func() {
-		cancel()
-	}()
+	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown failed: %w", err)

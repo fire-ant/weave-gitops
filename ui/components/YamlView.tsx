@@ -1,9 +1,10 @@
 import * as React from "react";
 import styled from "styled-components";
 import { ObjectRef } from "../lib/api/core/types.pb";
-import { IconButton } from "./Button";
-import Icon, { IconType } from "./Icon";
-type Props = {
+import { createYamlCommand } from "../lib/utils";
+import CopyToClipboard from "./CopyToCliboard";
+
+export type YamlViewProps = {
   className?: string;
   yaml: string;
   object?: ObjectRef;
@@ -18,39 +19,24 @@ const YamlHeader = styled.div`
   text-overflow: ellipsis;
 `;
 
-const CopyButton = styled(IconButton)`
-  &.MuiButton-outlinedPrimary {
-    border: 1px solid ${(props) => props.theme.colors.neutral10};
-    padding: ${(props) => props.theme.spacing.xs};
-  }
-  &.MuiButton-root {
-    height: initial;
-    width: initial;
-    min-width: 0px;
-  }
-`;
-
-function UnstyledYamlView({ yaml, object, className }: Props) {
-  const [copied, setCopied] = React.useState(false);
-  const headerText = `kubectl get ${object.kind.toLowerCase()} ${
-    object.name
-  } -n ${object.namespace} -o yaml `;
+function UnstyledYamlView({ yaml, object, className }: YamlViewProps) {
+  const headerText = createYamlCommand(
+    object.kind,
+    object.name,
+    object.namespace
+  );
 
   return (
     <div className={className}>
       <YamlHeader>
         {headerText}
-        <CopyButton
-          onClick={() => {
-            navigator.clipboard.writeText(headerText);
-            setCopied(true);
-          }}
-        >
-          <Icon
-            type={copied ? IconType.CheckMark : IconType.FileCopyIcon}
+        {headerText && (
+          <CopyToClipboard
+            value={headerText}
+            className="yaml-copy"
             size="small"
           />
-        </CopyButton>
+        )}
       </YamlHeader>
       <pre>
         {yaml.split("\n").map((yaml, index) => (

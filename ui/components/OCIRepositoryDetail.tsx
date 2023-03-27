@@ -3,6 +3,7 @@ import styled from "styled-components";
 import { useFeatureFlags } from "../hooks/featureflags";
 import { Kind } from "../lib/api/core/types.pb";
 import { OCIRepository } from "../lib/objects";
+import ClusterDashboardLink from "./ClusterDashboardLink";
 import { InfoField } from "./InfoList";
 import Interval from "./Interval";
 import Link from "./Link";
@@ -20,17 +21,20 @@ function OCIRepositoryDetail({
   ociRepository,
   customActions,
 }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && ociRepository.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && ociRepository.tenant
       ? [["Tenant", ociRepository.tenant]]
       : [];
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", ociRepository.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [
+        [
+          "Cluster",
+          <ClusterDashboardLink clusterName={ociRepository.clusterName} />,
+        ],
+      ]
+    : [];
 
   return (
     <SourceDetail
@@ -39,7 +43,7 @@ function OCIRepositoryDetail({
       source={ociRepository}
       customActions={customActions}
       info={[
-        ["Type", Kind.OCIRepository],
+        ["Kind", Kind.OCIRepository],
         ["URL", <Link href={ociRepository.url}>{ociRepository.url}</Link>],
         [
           "Last Updated",

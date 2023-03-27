@@ -2,24 +2,30 @@ package server_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/weaveworks/weave-gitops/core/clustersmngr"
-	"github.com/weaveworks/weave-gitops/core/clustersmngr/clustersmngrfakes"
+	"github.com/weaveworks/weave-gitops/core/clustersmngr/cluster"
+	"github.com/weaveworks/weave-gitops/core/clustersmngr/cluster/clusterfakes"
+	"github.com/weaveworks/weave-gitops/core/clustersmngr/fetcher"
 	"github.com/weaveworks/weave-gitops/core/nsaccess/nsaccessfakes"
 	"github.com/weaveworks/weave-gitops/core/server"
 	pb "github.com/weaveworks/weave-gitops/pkg/api/core"
 	"github.com/weaveworks/weave-gitops/pkg/kube"
 	"github.com/weaveworks/weave-gitops/pkg/server/auth"
+	"github.com/weaveworks/weave-gitops/pkg/services/crd"
 	"github.com/weaveworks/weave-gitops/pkg/testutils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 	v1 "k8s.io/api/core/v1"
-	apiruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	typedauth "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -45,26 +51,34 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func makeGRPCServer(cfg *rest.Config, t *testing.T) (pb.CoreClient, server.CoreServerConfig) {
+func makeGRPCServer(cfg *rest.Config, t *testing.T) pb.CoreClient {
 	log := logr.Discard()
 	nsChecker = nsaccessfakes.FakeChecker{}
-	nsChecker.FilterAccessibleNamespacesStub = func(ctx context.Context, c *rest.Config, n []v1.Namespace) ([]v1.Namespace, error) {
+	nsChecker.FilterAccessibleNamespacesStub = func(ctx context.Context, t typedauth.AuthorizationV1Interface, n []v1.Namespace) ([]v1.Namespace, error) {
 		// Pretend the user has access to everything
 		return n, nil
 	}
-
-	fetcher := &clustersmngrfakes.FakeClusterFetcher{}
-	fetcher.FetchReturns([]clustersmngr.Cluster{restConfigToCluster(k8sEnv.Rest)}, nil)
 
 	scheme, err := kube.CreateScheme()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	clustersManager := clustersmngr.NewClustersManager(fetcher, &nsChecker, log, scheme, clustersmngr.ClientFactory, clustersmngr.DefaultKubeConfigOptions)
+	cluster, err := cluster.NewSingleCluster("Default", k8sEnv.Rest, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	coreCfg := server.NewCoreConfig(log, cfg, "foobar", clustersManager)
+	fetch := fetcher.NewSingleClusterFetcher(cluster)
+
+	clustersManager := clustersmngr.NewClustersManager([]clustersmngr.ClusterFetcher{fetch}, &nsChecker, log)
+	coreCfg, err := server.NewCoreConfig(log, cfg, "foobar", clustersManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	coreCfg.NSAccess = &nsChecker
+	coreCfg.CRDService = crd.NewNoCacheFetcher(clustersManager)
 
 	core, err := server.NewCoreServer(coreCfg)
 	if err != nil {
@@ -73,10 +87,8 @@ func makeGRPCServer(cfg *rest.Config, t *testing.T) (pb.CoreClient, server.CoreS
 
 	lis := bufconn.Listen(1024 * 1024)
 
-	// Put the user in the `system:masters` group to avoid auth errors
-	principal := &auth.UserPrincipal{ID: "anne", Groups: []string{"system:masters"}}
 	s := grpc.NewServer(
-		withClientsPoolInterceptor(clustersManager, principal),
+		withClientsPoolInterceptor(clustersManager),
 	)
 
 	pb.RegisterCoreServer(s, core)
@@ -106,10 +118,19 @@ func makeGRPCServer(cfg *rest.Config, t *testing.T) (pb.CoreClient, server.CoreS
 		conn.Close()
 	})
 
-	return pb.NewCoreClient(conn), coreCfg
+	return pb.NewCoreClient(conn)
 }
 
-func withClientsPoolInterceptor(clustersManager clustersmngr.ClustersManager, user *auth.UserPrincipal) grpc.ServerOption {
+type userKey struct{}
+
+var UserKey = userKey{}
+
+const (
+	MetadataUserKey   string = "test_principal_user"
+	MetadataGroupsKey string = "test_principal_groups"
+)
+
+func withClientsPoolInterceptor(clustersManager clustersmngr.ClustersManager) grpc.ServerOption {
 	return grpc.UnaryInterceptor(func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if err := clustersManager.UpdateClusters(ctx); err != nil {
 			return nil, err
@@ -118,48 +139,56 @@ func withClientsPoolInterceptor(clustersManager clustersmngr.ClustersManager, us
 			return nil, err
 		}
 
-		clustersManager.UpdateUserNamespaces(ctx, user)
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, fmt.Errorf("getting metadata from context failed")
+		}
 
-		ctx = auth.WithPrincipal(ctx, user)
+		var user string
+		if len(md[MetadataUserKey]) > 0 {
+			user = md[MetadataUserKey][0]
+		}
+		groups := md[MetadataGroupsKey]
+		principal := auth.UserPrincipal{ID: user, Groups: groups}
+		clustersManager.UpdateUserNamespaces(ctx, &principal)
+
+		ctx = auth.WithPrincipal(ctx, &principal)
 
 		return handler(ctx, req)
 	})
 }
 
-func restConfigToCluster(cfg *rest.Config) clustersmngr.Cluster {
-	return clustersmngr.Cluster{
-		Name:        "Default",
-		Server:      cfg.Host,
-		BearerToken: cfg.BearerToken,
-		TLSConfig:   cfg.TLSClientConfig,
-	}
-}
-
-func makeServerConfig(fakeClient client.Client, t *testing.T) server.CoreServerConfig {
+func makeServerConfig(fakeClient client.Client, t *testing.T, clusterName string) server.CoreServerConfig {
 	log := logr.Discard()
 	nsChecker = nsaccessfakes.FakeChecker{}
-	nsChecker.FilterAccessibleNamespacesStub = func(ctx context.Context, c *rest.Config, n []v1.Namespace) ([]v1.Namespace, error) {
+	nsChecker.FilterAccessibleNamespacesStub = func(ctx context.Context, t typedauth.AuthorizationV1Interface, n []v1.Namespace) ([]v1.Namespace, error) {
 		// Pretend the user has access to everything
 		return n, nil
 	}
+	clientset := fake.NewSimpleClientset()
 
-	fetcher := &clustersmngrfakes.FakeClusterFetcher{}
-	fetcher.FetchReturns([]clustersmngr.Cluster{{Name: "Default"}}, nil)
+	cluster := clusterfakes.FakeCluster{}
 
-	scheme, err := kube.CreateScheme()
+	if clusterName == "" {
+		clusterName = "Default"
+	}
+
+	cluster.GetNameReturns(clusterName)
+	cluster.GetUserClientReturns(fakeClient, nil)
+	cluster.GetUserClientsetReturns(clientset, nil)
+	cluster.GetServerClientReturns(fakeClient, nil)
+
+	fetcher := fetcher.NewSingleClusterFetcher(&cluster)
+
+	// Don't include the clustersmngr.DefaultKubeConfigOptions here as we're using a fake kubeclient
+	// and the default options include the Flowcontrol setup which is not mocked out
+	clustersManager := clustersmngr.NewClustersManager([]clustersmngr.ClusterFetcher{fetcher}, &nsChecker, log)
+
+	coreCfg, err := server.NewCoreConfig(log, &rest.Config{}, "foobar", clustersManager)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	clientFn := func(cfgFunc clustersmngr.ClusterClientConfigFunc, cluster clustersmngr.Cluster, scheme *apiruntime.Scheme) (client.Client, error) {
-		return fakeClient, nil
-	}
-
-	// Don't include the clustersmngr.DefaultKubeConfigOptions here as we're using a fake kubeclient
-	// and the default options include the Flowcontrol setup which is not mocked out
-	clustersManager := clustersmngr.NewClustersManager(fetcher, &nsChecker, log, scheme, clientFn, nil)
-
-	coreCfg := server.NewCoreConfig(log, &rest.Config{}, "foobar", clustersManager)
 	coreCfg.NSAccess = &nsChecker
 
 	return coreCfg
@@ -173,10 +202,8 @@ func makeServer(cfg server.CoreServerConfig, t *testing.T) pb.CoreClient {
 
 	lis := bufconn.Listen(1024 * 1024)
 
-	// Put the user in the `system:masters` group to avoid auth errors
-	principal := &auth.UserPrincipal{ID: "anne", Groups: []string{"system:masters"}}
 	s := grpc.NewServer(
-		withClientsPoolInterceptor(cfg.ClustersManager, principal),
+		withClientsPoolInterceptor(cfg.ClustersManager),
 	)
 
 	pb.RegisterCoreServer(s, core)

@@ -7,9 +7,10 @@ BUILD_TIME?=$(shell date +'%Y-%m-%d_%T')
 BRANCH?=$(shell which git > /dev/null && git rev-parse --abbrev-ref HEAD)
 GIT_COMMIT?=$(shell which git > /dev/null && git log -n1 --pretty='%h')
 VERSION?=$(shell which git > /dev/null && git describe --always --match "v*")
-FLUX_VERSION=0.36.0
+FLUX_VERSION=0.37.0
 CHART_VERSION=$(shell which yq > /dev/null && yq e '.version' charts/gitops-server/Chart.yaml)
-DEV_BUCKET_CONTAINER_IMAGE=ghcr.io/weaveworks/gitops-bucket-server@sha256:8fbb7534e772e14ea598d287a4b54a3f556416cac6621095ce45f78346fda78a
+DEV_BUCKET_CONTAINER_IMAGE?=ghcr.io/weaveworks/gitops-bucket-server@sha256:9fa2a68032b9d67197a3d41a46b5029ffdf9a7bc415e4e7e9794faec8bc3b8e4
+TIER=oss
 
 # Go build args
 GOOS=$(shell which go > /dev/null && go env GOOS)
@@ -20,6 +21,7 @@ LDFLAGS?=-X github.com/weaveworks/weave-gitops/cmd/gitops/version.Branch=$(BRANC
 				 -X github.com/weaveworks/weave-gitops/cmd/gitops/version.Version=$(VERSION) \
 				 -X github.com/weaveworks/weave-gitops/pkg/version.FluxVersion=$(FLUX_VERSION) \
 				 -X github.com/weaveworks/weave-gitops/pkg/run/watch.DevBucketContainerImage=$(DEV_BUCKET_CONTAINER_IMAGE) \
+				 -X github.com/weaveworks/weave-gitops/pkg/analytics.Tier=$(TIER) \
 				 -X github.com/weaveworks/weave-gitops/core/server.Branch=$(BRANCH) \
 				 -X github.com/weaveworks/weave-gitops/core/server.Buildtime=$(BUILD_TIME) \
 				 -X github.com/weaveworks/weave-gitops/core/server.GitCommit=$(GIT_COMMIT) \
@@ -29,11 +31,10 @@ LDFLAGS?=-X github.com/weaveworks/weave-gitops/cmd/gitops/version.Branch=$(BRANC
 # Docker args
 # LDFLAGS is passed so we don't have to copy the entire .git directory into the image
 # just to get, e.g. the commit hash
-DOCKERARGS:=--build-arg FLUX_VERSION=$(FLUX_VERSION) --build-arg LDFLAGS="$(LDFLAGS)" --build-arg GIT_COMMIT=$(GIT_COMMIT)
+DOCKERARGS+=--build-arg FLUX_VERSION=$(FLUX_VERSION) --build-arg LDFLAGS="$(LDFLAGS)" --build-arg GIT_COMMIT=$(GIT_COMMIT)
 # We want to be able to reference this in builds & pushes
 DEFAULT_DOCKER_REPO=localhost:5001
-DOCKER_REGISTRY?=$(DEFAULT_DOCKER_REPO)
-DOCKER_IMAGE?=gitops-server
+DOCKER_IMAGE_TAG?=latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell which go > /dev/null && go env GOBIN))
@@ -111,7 +112,7 @@ vet: ## Run go vet against code
 	go vet ./...
 
 lint: ## Run linters against code
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.48.0
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.52.0
 	golangci-lint run --out-format=github-actions --timeout 600s --skip-files "tilt_modules"
 
 check-format:FORMAT_LIST=$(shell which gofmt > /dev/null && gofmt -l .)
@@ -141,16 +142,19 @@ proto: ## Generate protobuf files
 _docker:
 	DOCKER_BUILDKIT=1 docker build $(DOCKERARGS)\
 										-f $(DOCKERFILE) \
-										-t $(DEFAULT_DOCKER_REPO)/$(subst .dockerfile,,$(DOCKERFILE)):latest \
+										-t $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG) \
 										.
 
 docker-gitops: DOCKERFILE:=gitops.dockerfile
+docker-gitops: DOCKER_IMAGE_NAME?=$(DEFAULT_DOCKER_REPO)/gitops
 docker-gitops: _docker ## Build a Docker image of the gitops CLI
 
 docker-gitops-server: DOCKERFILE:=gitops-server.dockerfile
+docker-gitops-server: DOCKER_IMAGE_NAME?=$(DEFAULT_DOCKER_REPO)/gitops-server
 docker-gitops-server: _docker ## Build a Docker image of the Gitops UI Server
 
 docker-gitops-bucket-server: DOCKERFILE:=gitops-bucket-server.dockerfile
+docker-gitops-bucket-server: DOCKER_IMAGE_NAME?=$(DEFAULT_DOCKER_REPO)/gitops-bucket-server
 docker-gitops-bucket-server: _docker ## Build a Docker image of the Gitops UI Server
 
 ##@ UI

@@ -9,12 +9,15 @@ import (
 )
 
 var _ = DescribeTable("detectGitProviderFromURL", func(input string, expected GitProviderName) {
-	result, err := detectGitProviderFromURL(input, map[string]string{})
+	result, err := detectGitProviderFromURL(input, map[string]string{
+		"bitbucket.weave.works": "bitbucket-server",
+	})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(result).To(Equal(expected))
 },
 	Entry("ssh+github", "ssh://git@github.com/weaveworks/weave-gitops.git", GitProviderGitHub),
 	Entry("ssh+gitlab", "ssh://git@gitlab.com/weaveworks/weave-gitops.git", GitProviderGitLab),
+	Entry("https+bitbucket", "https://bitbucket.weave.works/scm/wg/config.git", GitProviderBitBucketServer),
 )
 
 var _ = Describe("get owner from url", func() {
@@ -27,7 +30,8 @@ var _ = Describe("get owner from url", func() {
 	},
 		Entry("github", "ssh://git@github.com/weaveworks/weave-gitops.git", GitProviderGitHub, "weaveworks"),
 		Entry("gitlab", "ssh://git@gitlab.com/weaveworks/weave-gitops.git", GitProviderGitLab, "weaveworks"),
-		Entry("gitlab with subgroup", "ssh://git@gitlab.com/weaveworks/sub_group/weave-gitops.git", GitProviderGitLab, "weaveworks/sub_group"),
+		Entry("gitlab", "ssh://git@gitlab.com/weaveworks/infra/weave-gitops.git", GitProviderGitLab, "weaveworks/infra"),
+		Entry("gitlab", "ssh://git@gitlab.com/weaveworks/infra/dev/weave-gitops.git", GitProviderGitLab, "weaveworks/infra/dev"),
 	)
 
 	It("missing owner", func() {
@@ -46,15 +50,6 @@ var _ = Describe("get owner from url", func() {
 		_, err = getOwnerFromURL(*u, GitProviderGitLab)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(Equal("could not get owner from url "))
-	})
-
-	It("subgroup in a subgroup", func() {
-		normalizedURL := "ssh://git@gitlab.com/weaveworks/sub_group/another_sub_group/weave-gitops.git"
-		u, err := url.Parse(normalizedURL)
-		Expect(err).NotTo(HaveOccurred())
-		_, err = getOwnerFromURL(*u, GitProviderGitLab)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(Equal("a subgroup in a subgroup is not currently supported"))
 	})
 })
 
@@ -123,6 +118,13 @@ var _ = DescribeTable("NewRepoURL", func(input, gitProviderEnv string, expected 
 		provider: GitProviderGitHub,
 		protocol: RepositoryURLProtocolSSH,
 	}),
+	Entry("subsubgroup", "https://github.com/sympatheticmoose/infra/dev/podinfo-deploy/", "", expectedRepoURL{
+		s:        "ssh://git@github.com/sympatheticmoose/infra/dev/podinfo-deploy.git",
+		owner:    "sympatheticmoose/infra/dev",
+		name:     "podinfo-deploy",
+		provider: GitProviderGitHub,
+		protocol: RepositoryURLProtocolSSH,
+	}),
 	Entry(
 		"custom domain",
 		"git@gitlab.acme.org/sympatheticmoose/podinfo-deploy/",
@@ -134,4 +136,18 @@ var _ = DescribeTable("NewRepoURL", func(input, gitProviderEnv string, expected 
 			provider: "gitlab",
 			protocol: RepositoryURLProtocolSSH,
 		}),
+	Entry("azure ssh clone", "git@ssh.dev.azure.com:v3/weaveworks/weave-gitops-integration/config", "", expectedRepoURL{
+		s:        "ssh://git@ssh.dev.azure.com/v3/weaveworks/weave-gitops-integration/config.git",
+		owner:    "weaveworks/weave-gitops-integration",
+		name:     "config",
+		provider: GitProviderAzureDevOps,
+		protocol: RepositoryURLProtocolSSH,
+	}),
+	Entry("azure https clone", "https://weaveworks@dev.azure.com/weaveworks/weave-gitops-integration/_git/config", "", expectedRepoURL{
+		s:        "ssh://git@dev.azure.com/weaveworks/weave-gitops-integration/_git/config.git",
+		owner:    "weaveworks/weave-gitops-integration",
+		name:     "config",
+		provider: GitProviderAzureDevOps,
+		protocol: RepositoryURLProtocolSSH,
+	}),
 )

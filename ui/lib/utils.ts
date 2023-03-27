@@ -1,9 +1,13 @@
 import _ from "lodash";
+import { DateTime } from "luxon";
 import { toast } from "react-toastify";
+import styled from "styled-components";
+import Flex from "../components/Flex";
 import { computeReady, ReadyType } from "../components/KubeStatusIndicator";
+import { AppVersion, repoUrl } from "../components/Version";
+import { GetVersionResponse } from "../lib/api/core/core.pb";
 import { Condition, Kind, ObjectRef } from "./api/core/types.pb";
 import { Automation, HelmRelease, Kustomization } from "./objects";
-import { PageRoute } from "./types";
 
 export function notifySuccess(message: string) {
   toast["success"](message);
@@ -11,12 +15,6 @@ export function notifySuccess(message: string) {
 
 export function notifyError(message: string) {
   toast["error"](`Error: ${message}`);
-}
-
-// Must be one of the valid URLs that we have already
-// configured on the Gitlab backend for our Oauth app.
-export function gitlabOAuthRedirectURI(): string {
-  return `${window.location.origin}${PageRoute.GitlabOAuthCallback}`;
 }
 
 export function poller(cb, interval): any {
@@ -156,3 +154,72 @@ export function getSourceRefForAutomation(
     ? (automation as Kustomization)?.sourceRef
     : (automation as HelmRelease)?.helmChart?.sourceRef;
 }
+
+// getAppVersion returns the app version to display in the UI or track in analytics.
+export function getAppVersion(
+  versionData: GetVersionResponse,
+  defaultVersion: string,
+  isLoading = false,
+  defaultVersionPrefix = ""
+): AppVersion {
+  const shouldDisplayApiVersion =
+    !isLoading &&
+    (versionData?.semver || "").replace(/^v+/, "") !== defaultVersion &&
+    versionData?.branch &&
+    versionData?.commit;
+
+  const versionText = shouldDisplayApiVersion
+    ? `${versionData.branch}-${versionData.commit}`
+    : `${defaultVersionPrefix}${defaultVersion}`;
+  const versionHref = shouldDisplayApiVersion
+    ? `${repoUrl}/commit/${versionData.commit}`
+    : `${repoUrl}/releases/tag/v${defaultVersion}`;
+
+  return {
+    versionText,
+    versionHref,
+  };
+}
+
+// formatLogTimestamp formats a timestamp string in the RFC3339 format
+// to a human-readable format with UTC offset.
+// If the timestamp is undefined or an empty string, it returns "-".
+export function formatLogTimestamp(timestamp?: string, zone?: string): string {
+  if (!timestamp) {
+    return "-";
+  }
+
+  let dt = DateTime.fromISO(timestamp);
+
+  if (zone) {
+    dt = dt.setZone(zone);
+  }
+
+  let formattedTimestamp = `${dt.toFormat("yyyy-LL-dd HH:mm:ss 'UTC'Z")}`;
+
+  if (dt.offset === 0) {
+    formattedTimestamp = formattedTimestamp.replace("UTC+0", "UTC");
+  }
+
+  return formattedTimestamp;
+}
+
+export const createYamlCommand = (
+  kind: string,
+  name: string,
+  namespace: string
+): string => {
+  if (kind && name) {
+    const namespaceString = namespace ? ` -n ${namespace}` : "";
+    return `kubectl get ${kind.toLowerCase()} ${name}${namespaceString} -o yaml`;
+  }
+  return null;
+};
+
+export const Fade = styled(Flex)<{
+  fade: boolean;
+}>`
+  opacity: ${({ fade }) => (fade ? 0 : 1)};
+  transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;
+  ${({ fade }) => fade && "pointer-events: none"};
+`;

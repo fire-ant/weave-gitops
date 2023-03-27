@@ -15,6 +15,10 @@ export enum Kind {
   OCIRepository = "OCIRepository",
   Provider = "Provider",
   Alert = "Alert",
+  ImageRepository = "ImageRepository",
+  ImageUpdateAutomation = "ImageUpdateAutomation",
+  ImagePolicy = "ImagePolicy",
+  Pod = "Pod",
 }
 
 export enum HelmRepositoryType {
@@ -61,12 +65,18 @@ export type NamespacedObjectReference = {
   namespace?: string
 }
 
+export type InventoryEntry = {
+  payload?: string
+  children?: InventoryEntry[]
+}
+
 export type Object = {
   payload?: string
   clusterName?: string
   tenant?: string
   uid?: string
   inventory?: GroupVersionKind[]
+  info?: string
 }
 
 export type Deployment = {

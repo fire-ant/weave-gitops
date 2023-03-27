@@ -34,6 +34,7 @@ export type Field = {
   value: string | ((k: any) => string | JSX.Element | null);
   sortValue?: (k: any) => any;
   textSearchable?: boolean;
+  minWidth?: number;
   maxWidth?: number;
   /** boolean for field to initially sort against. */
   defaultSort?: boolean;
@@ -93,14 +94,14 @@ const IconFlex = styled(Flex)`
   position: relative;
   padding: 0 ${(props) => props.theme.spacing.small};
 `;
+
 //funcs
 export const filterByStatusCallback = (v) => {
-  if (v.suspended) return "Suspended";
-  else if (computeReady(v["conditions"]) === ReadyType.Reconciling)
-    return ReadyType.Reconciling;
-  else if (computeReady(v["conditions"]) === ReadyType.Ready)
-    return ReadyType.Ready;
-  else return ReadyType.NotReady;
+  if (v.suspended) return ReadyType.Suspended;
+  const ready = computeReady(v["conditions"]);
+  if (ready === ReadyType.Reconciling) return ReadyType.Reconciling;
+  if (ready === ReadyType.Ready) return ReadyType.Ready;
+  return ReadyType.NotReady;
 };
 
 export function filterConfig(
@@ -121,7 +122,7 @@ export function filterConfig(
     []
   );
 
-  return { [key]: config };
+  return { [key]: { options: config, transformFunc: computeValue } };
 }
 
 export function filterRows<T>(rows: T[], filters: FilterConfig) {
@@ -134,15 +135,14 @@ export function filterRows<T>(rows: T[], filters: FilterConfig) {
 
     _.each(filters, (vals, category) => {
       let value;
-      // status
-      if (category === "status") {
-        value = filterByStatusCallback(row);
-      }
+
+      if (vals.transformFunc) value = vals.transformFunc(row);
       // strings
       else value = row[category];
 
-      if (!_.includes(vals, value)) {
+      if (!_.includes(vals.options, value)) {
         ok = false;
+        return ok;
       }
     });
 
@@ -194,7 +194,7 @@ export function initialFormState(cfg: FilterConfig, initialSelections?) {
   const allFilters = _.reduce(
     cfg,
     (r, vals, k) => {
-      _.each(vals, (v) => {
+      _.each(vals.options, (v) => {
         const key = `${k}${filterSeparator}${v}`;
         const selection = _.get(initialSelections, key);
         if (selection) {
@@ -217,17 +217,21 @@ function toPairs(state: FilterState): string[] {
   return _.concat(out, state.textFilters);
 }
 
-export function parseFilterStateFromURL(search: string): FilterSelections {
+export function parseFilterStateFromURL(search: string) {
   const query = qs.parse(search) as any;
+  const state = { initialSelections: {}, textFilters: [] };
   if (query.filters) {
     const split = query.filters.split("_");
     const next = {};
     _.each(split, (filterString) => {
       if (filterString) next[filterString] = true;
     });
-    return next;
+    state.initialSelections = next;
   }
-  return null;
+  if (query.search) {
+    state.textFilters = query.search.split("_").filter((item) => item);
+  }
+  return state;
 }
 
 export function filterSelectionsToQueryString(sel: FilterSelections) {
@@ -335,13 +339,13 @@ function UnstyledDataTable({
   const history = useHistory();
   const location = useLocation();
   const search = location.search;
-  const initialSelections = parseFilterStateFromURL(search);
+  const state = parseFilterStateFromURL(search);
 
   const [filterDialogOpen, setFilterDialogOpen] = React.useState(dialogOpen);
   const [filterState, setFilterState] = React.useState<FilterState>({
-    filters: selectionsToFilters(initialSelections),
-    formState: initialFormState(filters, initialSelections),
-    textFilters: [],
+    filters: selectionsToFilters(state.initialSelections, filters),
+    formState: initialFormState(filters, state.initialSelections),
+    textFilters: state.textFilters,
   });
 
   const handleFilterChange = (sel: FilterSelections) => {
@@ -359,7 +363,7 @@ function UnstyledDataTable({
     }
   };
 
-  const handleChipRemove = (chips: string[]) => {
+  const handleChipRemove = (chips: string[], filterList) => {
     const next = {
       ...filterState,
     };
@@ -368,23 +372,33 @@ function UnstyledDataTable({
       next.formState[chip] = false;
     });
 
-    const filters = selectionsToFilters(next.formState);
+    const filters = selectionsToFilters(next.formState, filterList);
 
     const textFilters = _.filter(
       next.textFilters,
       (f) => !_.includes(chips, f)
     );
 
+    let query = qs.parse(search);
+
+    if (textFilters.length) query["search"] = textFilters.join("_") + "_";
+    else if (query["search"]) query = _.omit(query, "search");
+    history.replace({ ...location, search: qs.stringify(query) });
+
     doChange(next.formState);
     setFilterState({ formState: next.formState, filters, textFilters });
   };
 
   const handleTextSearchSubmit = (val: string) => {
-    if (val)
-      setFilterState({
-        ...filterState,
-        textFilters: _.uniq(_.concat(filterState.textFilters, val)),
-      });
+    if (!val) return;
+    const query = qs.parse(search);
+    if (!query["search"]) query["search"] = `${val}_`;
+    if (!query["search"].includes(val)) query["search"] += `${val}_`;
+    history.replace({ ...location, search: qs.stringify(query) });
+    setFilterState({
+      ...filterState,
+      textFilters: _.uniq([...filterState.textFilters, val]),
+    });
   };
 
   const handleClearAll = () => {
@@ -394,7 +408,10 @@ function UnstyledDataTable({
       formState: resetFormState,
       textFilters: [],
     });
-    doChange(resetFormState);
+    const url = qs.parse(location.search);
+    //keeps things like clusterName and namespace for details pages
+    const cleared = _.omit(url, ["filters", "search"]);
+    history.replace({ ...location, search: qs.stringify(cleared) });
   };
 
   const handleFilterSelect = (filters, formState) => {
@@ -459,20 +476,24 @@ function UnstyledDataTable({
             />
           </TableCell>
         )}
-        {_.map(fields, (f) => (
-          <TableCell
-            style={
-              f.maxWidth && {
-                maxWidth: f.maxWidth,
-              }
-            }
-            key={f.label}
-          >
-            <Text>
-              {(typeof f.value === "function" ? f.value(r) : r[f.value]) || "-"}
-            </Text>
-          </TableCell>
-        ))}
+        {_.map(fields, (f) => {
+          const style: React.CSSProperties = {
+            ...(f.minWidth && { minWidth: f.minWidth }),
+            ...(f.maxWidth && { maxWidth: f.maxWidth }),
+          };
+
+          return (
+            <TableCell
+              style={Object.keys(style).length > 0 ? style : undefined}
+              key={f.label}
+            >
+              <Text>
+                {(typeof f.value === "function" ? f.value(r) : r[f.value]) ||
+                  "-"}
+              </Text>
+            </TableCell>
+          );
+        })}
       </TableRow>
     );
   });
@@ -484,7 +505,7 @@ function UnstyledDataTable({
           <>
             <ChipGroup
               chips={chips}
-              onChipRemove={handleChipRemove}
+              onChipRemove={(chips) => handleChipRemove(chips, filters)}
               onClearAll={handleClearAll}
             />
             <IconFlex align>
@@ -565,12 +586,14 @@ function UnstyledDataTable({
             </TableBody>
           </Table>
         </TableContainer>
-        <FilterDialog
-          onFilterSelect={handleFilterSelect}
-          filterList={filters}
-          formState={filterState.formState}
-          open={filterDialogOpen}
-        />
+        {!hideSearchAndFilters && (
+          <FilterDialog
+            onFilterSelect={handleFilterSelect}
+            filterList={filters}
+            formState={filterState.formState}
+            open={filterDialogOpen}
+          />
+        )}
       </Flex>
     </Flex>
   );
@@ -616,7 +639,7 @@ export const DataTable = styled(UnstyledDataTable)`
     text-overflow: ellipsis;
   }
   .filter-options-chip {
-    background-color: ${(props) => props.theme.colors.primary05};
+    background-color: ${(props) => props.theme.colors.primaryLight05};
   }
 `;
 

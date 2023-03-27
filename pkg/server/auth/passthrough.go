@@ -36,7 +36,7 @@ func NewBearerTokenPassthroughPrincipalGetter(log logr.Logger, verifier *oidc.ID
 // The token is not verified, and no ID or Group information will be available.
 func (pg *BearerTokenPassthroughPrincipalGetter) Principal(r *http.Request) (*UserPrincipal, error) {
 	token := r.Header.Get(pg.headerName)
-	if len(token) == 0 {
+	if token == "" {
 		return nil, nil
 	}
 
@@ -88,7 +88,10 @@ func (pg *JWTPassthroughCookiePrincipalGetter) Principal(r *http.Request) (*User
 		return nil, nil
 	}
 
-	principal, err := parseJWTToken(r.Context(), pg.verifier, cookie.Value)
+	// This passes nil as the ClaimsConfig because technically we don't really
+	// use the cookie, we're just passing it through, but this could change.
+	// In which case the getter would need an auth config.
+	principal, err := parseJWTToken(r.Context(), pg.verifier, cookie.Value, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse for passthrough: %w", err)
 	}

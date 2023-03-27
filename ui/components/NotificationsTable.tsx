@@ -23,8 +23,7 @@ type Props = {
 };
 
 function NotificationsTable({ className, rows }: Props) {
-  const { data: flagData } = useFeatureFlags();
-  const flags = flagData?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   let initialFilterState = {
     ...filterConfig(rows, "provider"),
@@ -32,13 +31,13 @@ function NotificationsTable({ className, rows }: Props) {
     ...filterConfig(rows, "namespace"),
     ...filterConfig(rows, "status", filterByStatusCallback),
   };
-  if (flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true") {
+  if (isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")) {
     initialFilterState = {
       ...initialFilterState,
       ...filterConfig(rows, "clusterName"),
     };
   }
-  if (flags.WEAVE_GITOPS_FEATURE_TENANCY === "true") {
+  if (isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY")) {
     initialFilterState = {
       ...initialFilterState,
       ...filterConfig(rows, "tenant"),
@@ -89,18 +88,17 @@ function NotificationsTable({ className, rows }: Props) {
         ) : null,
       sortValue: statusSortHelper,
     },
-    ...(flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
+    ...(isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
       ? [{ label: "Cluster", value: (obj) => obj.clusterName }]
       : []),
-    ...(flags.WEAVE_GITOPS_FEATURE_TENANCY === "true"
+    ...(isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY")
       ? [{ label: "Tenant", value: "tenant" }]
       : []),
   ];
 
-  if (!rows.length)
+  if (!rows?.length)
     return (
       <Flex wide tall column align>
-        <Spacer padding="xxl" />
         <MessageBox>
           <Text size="large" semiBold>
             No notifications are currently configured

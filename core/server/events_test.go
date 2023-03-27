@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	pb "github.com/weaveworks/weave-gitops/pkg/api/core"
 	"github.com/weaveworks/weave-gitops/pkg/kube"
+	"google.golang.org/grpc/metadata"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -22,7 +23,7 @@ func TestListEvents(t *testing.T) {
 
 	ctx := context.Background()
 
-	c, _ := makeGRPCServer(k8sEnv.Rest, t)
+	c := makeGRPCServer(k8sEnv.Rest, t)
 
 	scheme, err := kube.CreateScheme()
 	g.Expect(err).To(BeNil())
@@ -88,8 +89,11 @@ func TestListEvents(t *testing.T) {
 	g.Expect(k.Create(ctx, helmEvent)).To(Succeed())
 	g.Expect(k.Create(ctx, otherEvent)).To(Succeed())
 
+	md := metadata.Pairs(MetadataUserKey, "anne", MetadataGroupsKey, "system:masters")
+	outgoingCtx := metadata.NewOutgoingContext(ctx, md)
+
 	// Get kustomization events
-	res, err := c.ListEvents(ctx, &pb.ListEventsRequest{
+	res, err := c.ListEvents(outgoingCtx, &pb.ListEventsRequest{
 		InvolvedObject: &pb.ObjectRef{
 			Name:      kustomizationObjectName,
 			Namespace: ns.Name,
@@ -103,7 +107,7 @@ func TestListEvents(t *testing.T) {
 	g.Expect(res.Events[0].Component).To(Equal(kustomizeEvent.Source.Component))
 
 	// Get kustomization events, explicit cluster
-	res, err = c.ListEvents(ctx, &pb.ListEventsRequest{
+	res, err = c.ListEvents(outgoingCtx, &pb.ListEventsRequest{
 		InvolvedObject: &pb.ObjectRef{
 			Name:        kustomizationObjectName,
 			Namespace:   ns.Name,
@@ -118,7 +122,7 @@ func TestListEvents(t *testing.T) {
 	g.Expect(res.Events[0].Component).To(Equal(kustomizeEvent.Source.Component))
 
 	// Get helmrelease events
-	res, err = c.ListEvents(ctx, &pb.ListEventsRequest{
+	res, err = c.ListEvents(outgoingCtx, &pb.ListEventsRequest{
 		InvolvedObject: &pb.ObjectRef{
 			Name:      helmObjectName,
 			Namespace: ns.Name,

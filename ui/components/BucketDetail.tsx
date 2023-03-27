@@ -6,6 +6,7 @@ import Timestamp from "../components/Timestamp";
 import { useFeatureFlags } from "../hooks/featureflags";
 import { Kind } from "../lib/api/core/types.pb";
 import { Bucket } from "../lib/objects";
+import ClusterDashboardLink from "./ClusterDashboardLink";
 import { InfoField } from "./InfoList";
 
 type Props = {
@@ -15,18 +16,16 @@ type Props = {
 };
 
 function BucketDetail({ className, bucket, customActions }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   const tenancyInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_TENANCY === "true" && bucket.tenant
+    isFlagEnabled("WEAVE_GITOPS_FEATURE_TENANCY") && bucket.tenant
       ? [["Tenant", bucket.tenant]]
       : [];
 
-  const clusterInfo: InfoField[] =
-    flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
-      ? [["Cluster", bucket.clusterName]]
-      : [];
+  const clusterInfo: InfoField[] = isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
+    ? [["Cluster", <ClusterDashboardLink clusterName={bucket?.clusterName} />]]
+    : [];
 
   return (
     <SourceDetail
@@ -35,7 +34,7 @@ function BucketDetail({ className, bucket, customActions }: Props) {
       source={bucket}
       customActions={customActions}
       info={[
-        ["Type", Kind.Bucket],
+        ["Kind", Kind.Bucket],
         ["Endpoint", bucket.endpoint],
         ["Bucket Name", bucket.name],
         ["Last Updated", <Timestamp time={bucket.lastUpdatedAt} />],

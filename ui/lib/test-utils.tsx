@@ -8,17 +8,6 @@ import { ThemeProvider } from "styled-components";
 import AppContextProvider, { AppProps } from "../contexts/AppContext";
 import { CoreClientContext } from "../contexts/CoreClientContext";
 import {
-  Applications,
-  GetGithubAuthStatusRequest,
-  GetGithubAuthStatusResponse,
-  GetGithubDeviceCodeRequest,
-  GetGithubDeviceCodeResponse,
-  ParseRepoURLRequest,
-  ParseRepoURLResponse,
-  ValidateProviderTokenRequest,
-  ValidateProviderTokenResponse,
-} from "./api/applications/applications.pb";
-import {
   Core,
   GetChildObjectsRequest,
   GetChildObjectsResponse,
@@ -63,42 +52,6 @@ export const createCoreMockClient = (
   return promisified as typeof Core;
 };
 
-export type ApplicationOverrides = {
-  GetGithubDeviceCode?: (
-    req: GetGithubDeviceCodeRequest
-  ) => GetGithubDeviceCodeResponse;
-  GetGithubAuthStatus?: (
-    req: GetGithubAuthStatusRequest
-  ) => GetGithubAuthStatusResponse;
-  ParseRepoURL?: (req: ParseRepoURLRequest) => ParseRepoURLResponse;
-  ValidateProviderToken?: (
-    req: ValidateProviderTokenRequest
-  ) => ValidateProviderTokenResponse;
-};
-
-// Don't make the user wire up all the promise stuff to be interface-compliant
-export const createMockClient = (
-  ovr: ApplicationOverrides,
-  error?: RequestError
-): typeof Applications => {
-  const promisified = _.reduce(
-    ovr,
-    (result, handlerFn, method) => {
-      result[method] = (req) => {
-        if (error) {
-          return new Promise((_, reject) => reject(error));
-        }
-        return new Promise((accept) => accept(handlerFn(req) as any));
-      };
-
-      return result;
-    },
-    {}
-  );
-
-  return promisified as typeof Applications;
-};
-
 export function withTheme(element) {
   return (
     <MuiThemeProvider theme={muiTheme}>
@@ -107,12 +60,15 @@ export function withTheme(element) {
   );
 }
 
-type TestContextProps = AppProps & { api?: typeof Core };
+type TestContextProps = AppProps & {
+  api?: typeof Core;
+  featureFlags?: { [key: string]: string };
+};
 
 export function withContext(
   TestComponent,
   url: string,
-  { api, ...appProps }: TestContextProps
+  { api, featureFlags, ...appProps }: TestContextProps
 ) {
   const history = createMemoryHistory();
   history.push(url);
@@ -124,7 +80,9 @@ export function withContext(
     <Router history={history}>
       <AppContextProvider renderFooter {...appProps}>
         <QueryClientProvider client={queryClient}>
-          <CoreClientContext.Provider value={{ api, featureFlags: {} }}>
+          <CoreClientContext.Provider
+            value={{ api, featureFlags: featureFlags || {} }}
+          >
             {isElement ? TestComponent : <TestComponent />}
           </CoreClientContext.Provider>
         </QueryClientProvider>

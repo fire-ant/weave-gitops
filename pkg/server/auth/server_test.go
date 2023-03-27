@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-logr/logr"
+	"github.com/google/go-cmp/cmp"
 	"github.com/oauth2-proxy/mockoidc"
 	. "github.com/onsi/gomega"
 	"github.com/weaveworks/weave-gitops/pkg/featureflags"
@@ -49,7 +51,7 @@ func TestCallbackAllowsGet(t *testing.T) {
 	for _, m := range methods {
 		req := httptest.NewRequest(m, "https://example.com/callback", nil)
 		w := httptest.NewRecorder()
-		s.Callback().ServeHTTP(w, req)
+		s.Callback(w, req)
 
 		resp := w.Result()
 		g.Expect(resp.StatusCode).To(Equal(http.StatusMethodNotAllowed))
@@ -64,7 +66,7 @@ func TestCallbackErrorFromOIDC(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/callback?error=invalid_request&error_description=Unsupported%20response_type%20value", nil)
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -76,7 +78,7 @@ func TestCallbackCodeIsEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/callback", nil)
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -88,7 +90,7 @@ func TestCallbackStateCookieNotSet(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/callback?code=123", nil)
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -105,7 +107,7 @@ func TestCallbackStateCookieNotValid(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -122,7 +124,7 @@ func TestCallbackStateCookieNotBase64Encoded(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -141,7 +143,7 @@ func TestCallbackStateCookieNotJSONPayload(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusBadRequest))
 }
@@ -164,7 +166,7 @@ func TestCallbackCodeExchangeError(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	s.Callback().ServeHTTP(w, req)
+	s.Callback(w, req)
 
 	g.Expect(w.Result().StatusCode).To(Equal(http.StatusInternalServerError))
 }
@@ -536,7 +538,7 @@ func TestUserInfoAdminFlowBadCookie(t *testing.T) {
 	g.Expect(info.Email).To(Equal(""))
 }
 
-func TestUserInfoOIDCFlow(t *testing.T) {
+func getVerifyTokens(t *testing.T, m *mockoidc.MockOIDC) map[string]interface{} {
 	const (
 		state = "abcdef"
 		nonce = "ghijkl"
@@ -545,18 +547,14 @@ func TestUserInfoOIDCFlow(t *testing.T) {
 
 	g := NewGomegaWithT(t)
 
-	tokenSignerVerifier, err := auth.NewHMACTokenSignerVerifier(5 * time.Minute)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	s, m := makeAuthServer(t, nil, tokenSignerVerifier, []auth.AuthMethod{auth.OIDC})
-
-	authorizeQuery := url.Values{}
-	authorizeQuery.Set("client_id", m.Config().ClientID)
-	authorizeQuery.Set("scope", "openid email profile groups")
-	authorizeQuery.Set("response_type", "code")
-	authorizeQuery.Set("redirect_uri", "https://example.com/oauth2/callback")
-	authorizeQuery.Set("state", state)
-	authorizeQuery.Set("nonce", nonce)
+	authorizeQuery := valuesFromMap(map[string]string{
+		"client_id":     m.Config().ClientID,
+		"scope":         "openid email profile groups",
+		"response_type": "code",
+		"redirect_uri":  "https://example.com/oauth2/callback",
+		"state":         state,
+		"nonce":         nonce,
+	})
 
 	authorizeURL, err := url.Parse(m.AuthorizationEndpoint())
 	g.Expect(err).NotTo(HaveOccurred())
@@ -577,11 +575,12 @@ func TestUserInfoOIDCFlow(t *testing.T) {
 	g.Expect(appRedirect.Query().Get("code")).To(Equal(code))
 	g.Expect(appRedirect.Query().Get("state")).To(Equal(state))
 
-	tokenForm := url.Values{}
-	tokenForm.Set("client_id", m.Config().ClientID)
-	tokenForm.Set("client_secret", m.Config().ClientSecret)
-	tokenForm.Set("grant_type", "authorization_code")
-	tokenForm.Set("code", code)
+	tokenForm := valuesFromMap(map[string]string{
+		"client_id":     m.Config().ClientID,
+		"client_secret": m.Config().ClientSecret,
+		"grant_type":    "authorization_code",
+		"code":          code,
+	})
 
 	tokenReq, err := http.NewRequest(
 		http.MethodPost, m.TokenEndpoint(), bytes.NewBufferString(tokenForm.Encode()))
@@ -598,6 +597,19 @@ func TestUserInfoOIDCFlow(t *testing.T) {
 
 	tokens := make(map[string]interface{})
 	g.Expect(json.Unmarshal(body, &tokens)).To(Succeed())
+
+	return tokens
+}
+
+func TestUserInfoOIDCFlow(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	tokenSignerVerifier, err := auth.NewHMACTokenSignerVerifier(5 * time.Minute)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	s, m := makeAuthServer(t, nil, tokenSignerVerifier, []auth.AuthMethod{auth.OIDC})
+
+	tokens := getVerifyTokens(t, m)
 
 	_, err = m.Keypair.VerifyJWT(tokens["access_token"].(string))
 	g.Expect(err).NotTo(HaveOccurred())
@@ -622,6 +634,174 @@ func TestUserInfoOIDCFlow(t *testing.T) {
 
 	g.Expect(json.NewDecoder(resp.Body).Decode(&info)).To(Succeed())
 	g.Expect(info.Email).To(Equal("jane.doe@example.com"))
+}
+
+func TestUserInfoOIDCFlow_with_custom_claims(t *testing.T) {
+	const (
+		state = "abcdef"
+		nonce = "ghijkl"
+		code  = "mnopqr"
+	)
+
+	g := NewGomegaWithT(t)
+
+	tokenSignerVerifier, err := auth.NewHMACTokenSignerVerifier(5 * time.Minute)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	authServer, m := makeAuthServer(t, nil, tokenSignerVerifier, []auth.AuthMethod{auth.OIDC})
+
+	authorizeQuery := valuesFromMap(map[string]string{
+		"client_id":     m.Config().ClientID,
+		"scope":         "openid email profile groups",
+		"response_type": "code",
+		"redirect_uri":  "https://example.com/oauth2/callback",
+		"state":         state,
+		"nonce":         nonce,
+	})
+
+	authorizeURL, err := url.Parse(m.AuthorizationEndpoint())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	authorizeURL.RawQuery = authorizeQuery.Encode()
+
+	authorizeReq, err := http.NewRequest(http.MethodGet, authorizeURL.String(), nil)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	m.QueueCode(code)
+
+	authorizeResp, err := httpClient.Do(authorizeReq)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(authorizeResp.StatusCode).To(Equal(http.StatusFound))
+
+	tokenForm := valuesFromMap(map[string]string{
+		"client_id":     m.Config().ClientID,
+		"client_secret": m.Config().ClientSecret,
+		"grant_type":    "authorization_code",
+		"code":          code,
+	})
+
+	tokenReq, err := http.NewRequest(
+		http.MethodPost, m.TokenEndpoint(), bytes.NewBufferString(tokenForm.Encode()))
+	g.Expect(err).NotTo(HaveOccurred())
+	tokenReq.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	tokenResp, err := httpClient.Do(tokenReq)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	defer tokenResp.Body.Close()
+
+	body, err := io.ReadAll(tokenResp.Body)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	tokens := make(map[string]interface{})
+	g.Expect(json.Unmarshal(body, &tokens)).To(Succeed())
+
+	idToken, err := m.Keypair.VerifyJWT(tokens["id_token"].(string))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/userinfo", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.IDTokenCookieName,
+		Value: idToken.Raw,
+	})
+
+	w := httptest.NewRecorder()
+	authServer.OIDCConfig.ClaimsConfig = &auth.ClaimsConfig{
+		Username: "preferred_username",
+		Groups:   "groups",
+	}
+
+	authServer.UserInfo(w, req)
+
+	resp := w.Result()
+	g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+	var info auth.UserInfo
+
+	g.Expect(json.NewDecoder(resp.Body).Decode(&info)).To(Succeed())
+	g.Expect(info.Email).To(Equal("jane.doe"))
+	g.Expect(info.ID).To(Equal("jane.doe"))
+}
+
+// Given the user only has a valid refresh_token
+// we should be able to refresh it and get an id_token and an access_token
+func TestRefresh(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	tokenSignerVerifier, err := auth.NewHMACTokenSignerVerifier(5 * time.Minute)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	s, m := makeAuthServer(t, nil, tokenSignerVerifier, []auth.AuthMethod{auth.OIDC})
+
+	tokens := getVerifyTokens(t, m)
+
+	tf := tokens["refresh_token"].(string)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.RefreshTokenCookieName,
+		Value: tf,
+	})
+
+	w := httptest.NewRecorder()
+
+	user, err := s.Refresh(w, req)
+	g.Expect(err).To(Succeed())
+	g.Expect(user.ID).To(Equal("jane.doe@example.com"))
+
+	cookies := make(map[string]*http.Cookie)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == auth.IDTokenCookieName || c.Name == auth.AccessTokenCookieName || c.Name == auth.RefreshTokenCookieName {
+			cookies[c.Name] = c
+		}
+	}
+
+	// We should have the 3 cookie set.
+	// Technically the system doesn't have to set the refresh_token again
+	g.Expect(cookies).To(HaveKey(auth.IDTokenCookieName))
+	g.Expect(cookies).To(HaveKey(auth.AccessTokenCookieName))
+	g.Expect(cookies).To(HaveKey(auth.RefreshTokenCookieName))
+
+	// And they should all be valid!
+	_, err = m.Keypair.VerifyJWT(cookies[auth.IDTokenCookieName].Value)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = m.Keypair.VerifyJWT(cookies[auth.AccessTokenCookieName].Value)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = m.Keypair.VerifyJWT(cookies[auth.RefreshTokenCookieName].Value)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	idTokenExpires := cookies[auth.IDTokenCookieName].Expires
+	refreshTokenExpires := cookies[auth.RefreshTokenCookieName].Expires
+	g.Expect(refreshTokenExpires).To(Equal(idTokenExpires.Add(time.Hour)))
+}
+
+func TestRefreshNoToken(t *testing.T) {
+	g := NewGomegaWithT(t)
+	s, _ := makeAuthServer(t, nil, nil, []auth.AuthMethod{auth.OIDC})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	user, err := s.Refresh(w, req)
+	g.Expect(err).To(MatchError("couldn't fetch refresh token from cookie"))
+	g.Expect(user).To(BeNil())
+}
+
+func TestRefreshInvalidToken(t *testing.T) {
+	g := NewGomegaWithT(t)
+	s, _ := makeAuthServer(t, nil, nil, []auth.AuthMethod{auth.OIDC})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.RefreshTokenCookieName,
+		Value: "invalid",
+	})
+
+	user, err := s.Refresh(w, req)
+
+	g.Expect(err).To(MatchError(MatchRegexp("failed to refresh token: oauth2: cannot fetch token")))
+	g.Expect(user).To(BeNil())
 }
 
 func TestLogoutSuccess(t *testing.T) {
@@ -791,4 +971,90 @@ func TestAuthMethods(t *testing.T) {
 
 	g.Expect(featureflags.Get("OIDC_AUTH")).To(Equal("true"))
 	g.Expect(featureflags.Get("CLUSTER_USER_AUTH")).To(Equal("false"))
+}
+
+func TestNewOIDCConfigFromSecret(t *testing.T) {
+	configTests := []struct {
+		name string
+		data map[string][]byte
+		want auth.OIDCConfig
+	}{
+		{
+			name: "basic fields",
+			data: map[string][]byte{
+				"issuerURL":     []byte("https://example.com/test"),
+				"clientID":      []byte("test-client-id"),
+				"clientSecret":  []byte("test-client-secret"),
+				"redirectURL":   []byte("https://example.com/redirect"),
+				"tokenDuration": []byte("10m"),
+			},
+			want: auth.OIDCConfig{
+				IssuerURL:     "https://example.com/test",
+				ClientID:      "test-client-id",
+				ClientSecret:  "test-client-secret",
+				RedirectURL:   "https://example.com/redirect",
+				TokenDuration: time.Minute * 10,
+				ClaimsConfig:  &auth.ClaimsConfig{Username: "email", Groups: "groups"},
+				Scopes:        []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, auth.ScopeEmail, auth.ScopeGroups},
+			},
+		},
+		{
+			name: "bad duration defaults to 1 hour",
+			data: map[string][]byte{
+				"tokenDuration": []byte("10x"),
+			},
+			want: auth.OIDCConfig{
+				TokenDuration: time.Hour * 1,
+				ClaimsConfig:  &auth.ClaimsConfig{Username: "email", Groups: "groups"},
+				Scopes:        []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, auth.ScopeEmail, auth.ScopeGroups},
+			},
+		},
+		{
+			name: "overridden claims",
+			data: map[string][]byte{
+				"claimUsername": []byte("test-user"),
+				"claimGroups":   []byte("test-groups"),
+			},
+			want: auth.OIDCConfig{
+				TokenDuration: time.Hour * 1,
+				Scopes:        []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, auth.ScopeEmail, auth.ScopeGroups},
+				ClaimsConfig: &auth.ClaimsConfig{
+					Username: "test-user", Groups: "test-groups",
+				},
+			},
+		},
+		{
+			name: "overridden scopes",
+			data: map[string][]byte{
+				"claimUsername": []byte("test-user"),
+				"customScopes":  []byte("other-groups,new-user-id"),
+			},
+			want: auth.OIDCConfig{
+				TokenDuration: time.Hour * 1,
+				Scopes:        []string{"other-groups", "new-user-id"},
+				ClaimsConfig: &auth.ClaimsConfig{
+					Username: "test-user", Groups: "groups",
+				},
+			},
+		},
+	}
+
+	for _, tt := range configTests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := auth.NewOIDCConfigFromSecret(corev1.Secret{Data: tt.data})
+
+			if diff := cmp.Diff(tt.want, cfg); diff != "" {
+				t.Fatalf("failed to parse config from secret:\n%s", diff)
+			}
+		})
+	}
+}
+
+func valuesFromMap(data map[string]string) url.Values {
+	vals := url.Values{}
+	for k, v := range data {
+		vals.Set(k, v)
+	}
+
+	return vals
 }

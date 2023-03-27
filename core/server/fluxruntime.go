@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/weaveworks/weave-gitops/core/clustersmngr"
+	"github.com/weaveworks/weave-gitops/core/logger"
 	coretypes "github.com/weaveworks/weave-gitops/core/server/types"
 	pb "github.com/weaveworks/weave-gitops/pkg/api/core"
 	"github.com/weaveworks/weave-gitops/pkg/server/auth"
@@ -39,7 +41,17 @@ var (
 	ErrFluxNamespaceNotFound = errors.New("could not find flux namespace in cluster")
 	// ErrListingDeployments no deployments found
 	ErrListingDeployments = errors.New("could not list deployments in namespace")
+
+	DefaultFluxNamespace = lookupEnv("WEAVE_GITOPS_FALLBACK_NAMESPACE", "flux-system")
 )
+
+func lookupEnv(envVar, fallback string) string {
+	if val, ok := os.LookupEnv(envVar); ok {
+		return val
+	}
+
+	return fallback
+}
 
 func (cs *coreServer) ListFluxRuntimeObjects(ctx context.Context, msg *pb.ListFluxRuntimeObjectsRequest) (*pb.ListFluxRuntimeObjectsResponse, error) {
 	respErrors := []*pb.ListError{}
@@ -58,8 +70,8 @@ func (cs *coreServer) ListFluxRuntimeObjects(ctx context.Context, msg *pb.ListFl
 	var results []*pb.Deployment
 
 	for clusterName, nss := range cs.clustersManager.GetClustersNamespaces() {
-		fluxNs := filterFluxNamespace(nss)
-		if fluxNs == nil {
+		fluxNamepsaces := filterFluxNamespace(nss)
+		if len(fluxNamepsaces) == 0 {
 			respErrors = append(respErrors, &pb.ListError{ClusterName: clusterName, Namespace: "", Message: ErrFluxNamespaceNotFound.Error()})
 			continue
 		}
@@ -70,35 +82,37 @@ func (cs *coreServer) ListFluxRuntimeObjects(ctx context.Context, msg *pb.ListFl
 
 		list := &appsv1.DeploymentList{}
 
-		if err := clustersClient.List(ctx, clusterName, list, opts, client.InNamespace(fluxNs.Name)); err != nil {
-			respErrors = append(respErrors, &pb.ListError{ClusterName: clusterName, Namespace: fluxNs.Name, Message: fmt.Sprintf("%s, %s", ErrListingDeployments.Error(), err)})
-			continue
-		}
-
-		for _, d := range list.Items {
-			r := &pb.Deployment{
-				Name:        d.Name,
-				Namespace:   d.Namespace,
-				Conditions:  []*pb.Condition{},
-				ClusterName: clusterName,
-				Uid:         string(d.GetUID()),
-				Labels:      d.Labels,
+		for _, fluxNs := range fluxNamepsaces {
+			if err := clustersClient.List(ctx, clusterName, list, opts, client.InNamespace(fluxNs.Name)); err != nil {
+				respErrors = append(respErrors, &pb.ListError{ClusterName: clusterName, Namespace: fluxNs.Name, Message: fmt.Sprintf("%s, %s", ErrListingDeployments.Error(), err)})
+				continue
 			}
 
-			for _, cond := range d.Status.Conditions {
-				r.Conditions = append(r.Conditions, &pb.Condition{
-					Message: cond.Message,
-					Reason:  cond.Reason,
-					Status:  string(cond.Status),
-					Type:    string(cond.Type),
-				})
-			}
+			for _, d := range list.Items {
+				r := &pb.Deployment{
+					Name:        d.Name,
+					Namespace:   d.Namespace,
+					Conditions:  []*pb.Condition{},
+					ClusterName: clusterName,
+					Uid:         string(d.GetUID()),
+					Labels:      d.Labels,
+				}
 
-			for _, img := range d.Spec.Template.Spec.Containers {
-				r.Images = append(r.Images, img.Image)
-			}
+				for _, cond := range d.Status.Conditions {
+					r.Conditions = append(r.Conditions, &pb.Condition{
+						Message: cond.Message,
+						Reason:  cond.Reason,
+						Status:  string(cond.Status),
+						Type:    string(cond.Type),
+					})
+				}
 
-			results = append(results, r)
+				for _, img := range d.Spec.Template.Spec.Containers {
+					r.Images = append(r.Images, img.Image)
+				}
+
+				results = append(results, r)
+			}
 		}
 	}
 
@@ -148,8 +162,13 @@ func (cs *coreServer) ListFluxCrds(ctx context.Context, msg *pb.ListFluxCrdsRequ
 			for _, d := range list.Items {
 				version := ""
 
-				if len(d.Spec.Versions) > 0 {
-					version = d.Spec.Versions[0].Name
+				for _, v := range d.Spec.Versions {
+					// This is the "active" version of the CRD in etcd, and a CRD
+					// can only have one version marked as such.
+					if v.Storage {
+						version = v.Name
+						break
+					}
 				}
 
 				r := &pb.Crd{
@@ -170,14 +189,21 @@ func (cs *coreServer) ListFluxCrds(ctx context.Context, msg *pb.ListFluxCrdsRequ
 	return &pb.ListFluxCrdsResponse{Crds: results, Errors: respErrors}, nil
 }
 
-func filterFluxNamespace(nss []v1.Namespace) *v1.Namespace {
+func filterFluxNamespace(nss []v1.Namespace) []v1.Namespace {
+	fluxSystem := []v1.Namespace{}
+
 	for _, ns := range nss {
 		if val, ok := ns.Labels[coretypes.PartOfLabel]; ok && val == FluxNamespacePartOf {
-			return &ns
+			fluxSystem = append(fluxSystem, ns)
+			continue
+		}
+
+		if ns.Name == DefaultFluxNamespace {
+			fluxSystem = append(fluxSystem, ns)
 		}
 	}
 
-	return nil
+	return fluxSystem
 }
 
 func (cs *coreServer) GetReconciledObjects(ctx context.Context, msg *pb.GetReconciledObjectsRequest) (*pb.GetReconciledObjectsResponse, error) {
@@ -208,87 +234,96 @@ func (cs *coreServer) GetReconciledObjects(ctx context.Context, msg *pb.GetRecon
 		checkDup = map[types.UID]bool{}
 		resultMu = sync.Mutex{}
 
-		errs   = &multierror.Error{}
-		errsMu = sync.Mutex{}
+		respErrors = multierror.Error{}
+		errsMu     = sync.Mutex{}
 
 		wg = sync.WaitGroup{}
 	)
 
-	for _, gvk := range msg.Kinds {
-		wg.Add(1)
+	clusterUserNamespaces := cs.clustersManager.GetUserNamespaces(auth.Principal(ctx))
 
-		go func(clusterName string, gvk *pb.GroupVersionKind) {
-			defer wg.Done()
+	kinds := getUniqueKinds(msg.Kinds)
 
-			listResult := unstructured.UnstructuredList{}
+	for _, namespaces := range clusterUserNamespaces {
+		for _, ns := range namespaces {
+			for _, gvk := range kinds {
+				wg.Add(1)
+				go func(namespace, clusterName string, gvk *pb.GroupVersionKind) {
+					defer wg.Done()
 
-			listResult.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   gvk.Group,
-				Kind:    gvk.Kind,
-				Version: gvk.Version,
-			})
+					listResult := unstructured.UnstructuredList{}
 
-			if err := clustersClient.List(ctx, msg.ClusterName, &listResult, opts); err != nil {
-				if k8serrors.IsForbidden(err) {
-					// Our service account (or impersonated user) may not have the ability to see the resource in question,
-					// in the given namespace. We pretend it doesn't exist and keep looping.
-					// We need logging to make this error more visible.
-					return
-				}
+					listResult.SetGroupVersionKind(schema.GroupVersionKind{
+						Group:   gvk.Group,
+						Kind:    gvk.Kind,
+						Version: gvk.Version,
+					})
 
-				if k8serrors.IsTimeout(err) {
-					cs.logger.Error(err, "List timedout", "gvk", gvk.String())
+					if err := clustersClient.List(ctx, clusterName, &listResult, opts, client.InNamespace(namespace)); err != nil {
+						if k8serrors.IsForbidden(err) {
+							cs.logger.V(logger.LogLevelDebug).Info(
+								"forbidden list request",
+								"cluster", msg.ClusterName,
+								"automation", msg.AutomationName,
+								"namespace", msg.Namespace,
+								"gvk", gvk.String(),
+							)
+							// Our service account (or impersonated user) may not have the ability to see the resource in question,
+							// in the given namespace. We pretend it doesn't exist and keep looping.
+							// We need logging to make this error more visible.
+							return
+						}
 
-					return
-				}
+						if k8serrors.IsTimeout(err) {
+							cs.logger.Error(err, "List timedout", "gvk", gvk.String())
 
-				errsMu.Lock()
-				errs = multierror.Append(errs, fmt.Errorf("listing unstructured object: %w", err))
-				errsMu.Unlock()
+							return
+						}
+
+						errsMu.Lock()
+						respErrors = *multierror.Append(fmt.Errorf("listing unstructured object: %w", err), respErrors.Errors...)
+						errsMu.Unlock()
+
+						cs.logger.Error(err, "failed listing resources", "namespace", namespace, "gvk", gvk.String())
+					}
+
+					for _, u := range listResult.Items {
+						uid := u.GetUID()
+						resultMu.Lock()
+						if !checkDup[uid] {
+							result = append(result, u)
+							checkDup[uid] = true
+						}
+						resultMu.Unlock()
+					}
+				}(ns.Name, msg.ClusterName, gvk)
 			}
-
-			resultMu.Lock()
-			for _, u := range listResult.Items {
-				uid := u.GetUID()
-
-				if !checkDup[uid] {
-					result = append(result, u)
-					checkDup[uid] = true
-				}
-			}
-			resultMu.Unlock()
-		}(msg.ClusterName, gvk)
+		}
 	}
 
 	wg.Wait()
 
-	clusterUserNamespaces := cs.clustersManager.GetUserNamespaces(auth.Principal(ctx))
 	objects := []*pb.Object{}
-	respErrors := multierror.Error{}
 
-	for _, obj := range result {
-		tenant := GetTenant(obj.GetNamespace(), msg.ClusterName, clusterUserNamespaces)
+	for _, unstructuredObj := range result {
+		tenant := GetTenant(unstructuredObj.GetNamespace(), msg.ClusterName, clusterUserNamespaces)
 
 		var o *pb.Object
 
-		if obj.GetKind() == "Secret" {
-			cleanSecret, err := sanitizeSecret(&obj)
+		var obj client.Object = &unstructuredObj
+
+		if unstructuredObj.GetKind() == "Secret" {
+			obj, err = sanitizeSecret(&unstructuredObj)
 			if err != nil {
 				respErrors = *multierror.Append(fmt.Errorf("error sanitizing secrets: %w", err), respErrors.Errors...)
 				continue
 			}
+		}
 
-			o, err = coretypes.K8sObjectToProto(cleanSecret, msg.ClusterName, tenant, nil)
-			if err != nil {
-				respErrors = *multierror.Append(fmt.Errorf("error converting objects: %w", err), respErrors.Errors...)
-				continue
-			}
-		} else {
-			o, err = coretypes.K8sObjectToProto(&obj, msg.ClusterName, tenant, nil)
-			if err != nil {
-				respErrors = *multierror.Append(fmt.Errorf("error converting objects: %w", err), respErrors.Errors...)
-				continue
-			}
+		o, err = coretypes.K8sObjectToProto(obj, msg.ClusterName, tenant, nil, "")
+		if err != nil {
+			respErrors = *multierror.Append(fmt.Errorf("error converting objects: %w", err), respErrors.Errors...)
+			continue
 		}
 
 		objects = append(objects, o)
@@ -303,6 +338,8 @@ func (cs *coreServer) GetChildObjects(ctx context.Context, msg *pb.GetChildObjec
 		return nil, fmt.Errorf("error getting impersonating client: %w", err)
 	}
 
+	opts := client.InNamespace(msg.Namespace)
+
 	listResult := unstructured.UnstructuredList{}
 
 	listResult.SetGroupVersionKind(schema.GroupVersionKind{
@@ -311,7 +348,7 @@ func (cs *coreServer) GetChildObjects(ctx context.Context, msg *pb.GetChildObjec
 		Kind:    msg.GroupVersionKind.Kind,
 	})
 
-	if err := clustersClient.List(ctx, msg.ClusterName, &listResult); err != nil {
+	if err := clustersClient.List(ctx, msg.ClusterName, &listResult, opts); err != nil {
 		return nil, fmt.Errorf("could not get unstructured object: %s", err)
 	}
 
@@ -339,7 +376,7 @@ ItemsLoop:
 
 		tenant := GetTenant(obj.GetNamespace(), msg.ClusterName, clusterUserNamespaces)
 
-		obj, err := coretypes.K8sObjectToProto(&obj, msg.ClusterName, tenant, nil)
+		obj, err := coretypes.K8sObjectToProto(&obj, msg.ClusterName, tenant, nil, "")
 
 		if err != nil {
 			respErrors = *multierror.Append(fmt.Errorf("error converting objects: %w", err), respErrors.Errors...)
@@ -366,4 +403,19 @@ func sanitizeSecret(obj *unstructured.Unstructured) (client.Object, error) {
 	s.Data = map[string][]byte{"redacted": []byte(nil)}
 
 	return s, nil
+}
+
+func getUniqueKinds(gvks []*pb.GroupVersionKind) []*pb.GroupVersionKind {
+	uniqueMap := map[string]*pb.GroupVersionKind{}
+	for _, gvk := range gvks {
+		uniqueMap[gvk.String()] = gvk
+	}
+
+	unique := []*pb.GroupVersionKind{}
+
+	for _, gvk := range uniqueMap {
+		unique = append(unique, gvk)
+	}
+
+	return unique
 }

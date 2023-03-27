@@ -1,4 +1,3 @@
-import _ from "lodash";
 import * as React from "react";
 import styled from "styled-components";
 import { useFeatureFlags } from "../hooks/featureflags";
@@ -8,22 +7,19 @@ import DataTable, { filterByStatusCallback, filterConfig } from "./DataTable";
 import KubeStatusIndicator from "./KubeStatusIndicator";
 import Link from "./Link";
 
-const fluxVersionLabel = "app.kubernetes.io/version";
-
 type Props = {
   className?: string;
   controllers?: Deployment[];
 };
 
 function ControllersTable({ className, controllers = [] }: Props) {
-  const { data } = useFeatureFlags();
-  const flags = data?.flags || {};
+  const { isFlagEnabled } = useFeatureFlags();
 
   let initialFilterState = {
     ...filterConfig(controllers, "status", filterByStatusCallback),
   };
 
-  if (flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true") {
+  if (isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")) {
     initialFilterState = {
       ...initialFilterState,
       ...filterConfig(controllers, "clusterName"),
@@ -54,25 +50,24 @@ function ControllersTable({ className, controllers = [] }: Props) {
             ) : null,
           sortValue: statusSortHelper,
         },
-        ...(flags.WEAVE_GITOPS_FEATURE_CLUSTER === "true"
+        ...(isFlagEnabled("WEAVE_GITOPS_FEATURE_CLUSTER")
           ? [{ label: "Cluster", value: "clusterName" }]
           : []),
         {
-          label: "Flux Version",
-          value: (d: Deployment) =>
-            d.labels ? d.labels[fluxVersionLabel] : "",
+          label: "Namespace",
+          value: "namespace",
         },
         {
+          label: "Image",
           value: (d: Deployment) => (
             <>
-              {_.map(d.images, (img) => (
+              {d.images.map((img) => (
                 <Link href={`https://${img}`} key={img} newTab>
                   {img}
                 </Link>
               ))}
             </>
           ),
-          label: "Image",
         },
       ]}
     />

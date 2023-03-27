@@ -23,13 +23,18 @@ export const theme: DefaultTheme = {
     black: "#1a1a1a",
     white: "#fff",
     primary: "#00b3ec",
-    primary05: "#E5F7FD",
-    primaryLight: "#98E0F7",
+    primaryLight05: "#E5F7FD",
+    primaryLight10: "#98E0F7",
     primary10: "#009CCC",
     primary20: "#006B8E",
-    success: "#27AE60",
-    alert: "#BC381D",
-    suspended: "#f2994a",
+    successLight: "#C9EBD7",
+    successMedium: "#78CC9C",
+    successOriginal: "#27AE60",
+    successDark: "#156034",
+    alertLight: "#EECEC7",
+    alertMedium: "#D58572",
+    alertOriginal: "#BC3B1D",
+    alertDark: "#9F3119",
     neutralGray: "#F6F7F9",
     neutral00: "#ffffff",
     neutral10: "#f5f5f5",
@@ -38,25 +43,32 @@ export const theme: DefaultTheme = {
     neutral40: "#1a1a1a",
     backGrey: "#eef0f4",
     feedbackLight: "#FCE6D2",
+    feedbackMedium: "#F7BF8E",
+    feedbackOriginal: "#F2994A",
+    feedbackDark: "#8A460A",
+    defaultLight: "#FCE6D2",
+    defaultMedium: "#F7BF8E",
+    defaultOriginal: "#F2994A",
+    defaultDark: "#8A460A",
   },
   spacing: {
-    // 16px
-    base: `${baseSpacingNumber}px`,
-    // 32px
-    large: `${baseSpacingNumber * 2}px`,
-    // 24px
-    medium: `${baseSpacingNumber * 1.5}px`,
     none: "0",
-    // 12px
-    small: `${baseSpacingNumber * 0.75}px`,
-    // 48px
-    xl: `${baseSpacingNumber * 3}px`,
-    // 8px
-    xs: `${baseSpacingNumber * 0.5}px`,
-    // 64px
-    xxl: `${baseSpacingNumber * 4}px`,
     // 4px
     xxs: `${baseSpacingNumber * 0.25}px`,
+    // 8px
+    xs: `${baseSpacingNumber * 0.5}px`,
+    // 12px
+    small: `${baseSpacingNumber * 0.75}px`,
+    // 16px
+    base: `${baseSpacingNumber}px`,
+    // 24px
+    medium: `${baseSpacingNumber * 1.5}px`,
+    // 32px
+    large: `${baseSpacingNumber * 2}px`,
+    // 48px
+    xl: `${baseSpacingNumber * 3}px`,
+    // 64px
+    xxl: `${baseSpacingNumber * 4}px`,
   },
   borderRadius: {
     circle: "50%",
@@ -101,6 +113,7 @@ export const GlobalStyle = createGlobalStyle`
   .auth-modal-size {
     min-height: 475px
   }
+  //scrollbar
   ::-webkit-scrollbar-track {
     margin-top: 5px;
     -webkit-box-shadow: transparent;
@@ -121,6 +134,30 @@ export const GlobalStyle = createGlobalStyle`
   ::-webkit-scrollbar-thumb:hover {
     background-color: ${(props) => props.theme.colors.neutral30};
   }
+  //MuiTabs
+  .horizontal-tabs {
+    .MuiTab-root {
+      line-height: 1;
+      letter-spacing: 1px;
+      height: 32px;
+      min-height: 32px;
+      width: fit-content;
+      @media (min-width: 600px) {
+        min-width: 132px;
+      }
+    }
+    .MuiTabs-root {
+      min-height: 32px;
+      margin: ${(props) => props.theme.spacing.xs} 0;
+    }
+    .MuiTabs-fixed {
+      height: 32px;
+    }
+    .MuiTabs-indicator {
+      height: 3px;
+      background-color: ${(props) => props.theme.colors.primary};
+    }
+  }
 `;
 
 export const muiTheme = createTheme({
@@ -132,7 +169,7 @@ export const muiTheme = createTheme({
     },
     secondary: {
       //Feedback - Alert - Original
-      main: theme.colors.alert,
+      main: theme.colors.alertOriginal,
     },
     text: {
       //Neutral - Neutral - 40
@@ -156,6 +193,12 @@ export const muiTheme = createTheme({
     MuiPaper: {
       root: {
         overflowX: "hidden",
+      },
+    },
+    MuiDrawer: {
+      paper: {
+        width: "60%",
+        minWidth: 600,
       },
     },
   },

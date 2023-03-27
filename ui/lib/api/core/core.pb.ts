@@ -6,6 +6,18 @@
 
 import * as fm from "../../fetch.pb"
 import * as Gitops_coreV1Types from "./types.pb"
+export type GetInventoryRequest = {
+  kind?: string
+  name?: string
+  namespace?: string
+  clusterName?: string
+  withChildren?: boolean
+}
+
+export type GetInventoryResponse = {
+  entries?: Gitops_coreV1Types.InventoryEntry[]
+}
+
 export type Pagination = {
   pageSize?: number
   pageToken?: string
@@ -51,6 +63,7 @@ export type ListObjectsRequest = {
   namespace?: string
   kind?: string
   clusterName?: string
+  labels?: {[key: string]: string}
 }
 
 export type ListObjectsResponse = {
@@ -138,12 +151,43 @@ export type ToggleSuspendResourceRequest = {
 export type ToggleSuspendResourceResponse = {
 }
 
+export type GetSessionLogsRequest = {
+  sessionNamespace?: string
+  sessionId?: string
+  token?: string
+  logSourceFilter?: string
+  logLevelFilter?: string
+}
+
+export type LogEntry = {
+  timestamp?: string
+  source?: string
+  level?: string
+  message?: string
+  sortingKey?: string
+}
+
+export type GetSessionLogsResponse = {
+  logs?: LogEntry[]
+  nextToken?: string
+  error?: string
+  logSources?: string[]
+}
+
+export type IsCRDAvailableRequest = {
+  name?: string
+}
+
+export type IsCRDAvailableResponse = {
+  clusters?: {[key: string]: boolean}
+}
+
 export class Core {
   static GetObject(req: GetObjectRequest, initReq?: fm.InitReq): Promise<GetObjectResponse> {
     return fm.fetchReq<GetObjectRequest, GetObjectResponse>(`/v1/object/${req["name"]}?${fm.renderURLSearchParams(req, ["name"])}`, {...initReq, method: "GET"})
   }
   static ListObjects(req: ListObjectsRequest, initReq?: fm.InitReq): Promise<ListObjectsResponse> {
-    return fm.fetchReq<ListObjectsRequest, ListObjectsResponse>(`/v1/objects?${fm.renderURLSearchParams(req, [])}`, {...initReq, method: "GET"})
+    return fm.fetchReq<ListObjectsRequest, ListObjectsResponse>(`/v1/objects`, {...initReq, method: "POST", body: JSON.stringify(req)})
   }
   static ListFluxRuntimeObjects(req: ListFluxRuntimeObjectsRequest, initReq?: fm.InitReq): Promise<ListFluxRuntimeObjectsResponse> {
     return fm.fetchReq<ListFluxRuntimeObjectsRequest, ListFluxRuntimeObjectsResponse>(`/v1/flux_runtime_objects?${fm.renderURLSearchParams(req, [])}`, {...initReq, method: "GET"})
@@ -177,5 +221,14 @@ export class Core {
   }
   static ToggleSuspendResource(req: ToggleSuspendResourceRequest, initReq?: fm.InitReq): Promise<ToggleSuspendResourceResponse> {
     return fm.fetchReq<ToggleSuspendResourceRequest, ToggleSuspendResourceResponse>(`/v1/suspend`, {...initReq, method: "POST", body: JSON.stringify(req)})
+  }
+  static GetSessionLogs(req: GetSessionLogsRequest, initReq?: fm.InitReq): Promise<GetSessionLogsResponse> {
+    return fm.fetchReq<GetSessionLogsRequest, GetSessionLogsResponse>(`/v1/session_logs`, {...initReq, method: "POST", body: JSON.stringify(req)})
+  }
+  static IsCRDAvailable(req: IsCRDAvailableRequest, initReq?: fm.InitReq): Promise<IsCRDAvailableResponse> {
+    return fm.fetchReq<IsCRDAvailableRequest, IsCRDAvailableResponse>(`/v1/crd/is_available?${fm.renderURLSearchParams(req, [])}`, {...initReq, method: "GET"})
+  }
+  static GetInventory(req: GetInventoryRequest, initReq?: fm.InitReq): Promise<GetInventoryResponse> {
+    return fm.fetchReq<GetInventoryRequest, GetInventoryResponse>(`/v1/inventory?${fm.renderURLSearchParams(req, [])}`, {...initReq, method: "GET"})
   }
 }

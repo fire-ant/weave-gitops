@@ -146,7 +146,6 @@ func TestWithAPIAuthOnlyUsesValidMethods(t *testing.T) {
 	g.Expect(res).To(HaveHTTPStatus(http.StatusUnauthorized))
 
 	// Try logging in via the static user
-	// res1, err := http.Post(s.URL+"/oauth2/sign_in", "application/json", bytes.NewReader([]byte(`{"password":"my-secret-password"}`)))
 	res1, err := http.Post(s.URL+"/oauth2/sign_in", "application/json", bytes.NewReader([]byte(`{"password":"bad-password"}`)))
 
 	g.Expect(err).NotTo(HaveOccurred())
@@ -158,6 +157,59 @@ func TestWithAPIAuthOnlyUsesValidMethods(t *testing.T) {
 	auth.WithAPIAuth(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {}), srv, []string{"/v1/featureflags"}).ServeHTTP(res, req)
 
 	g.Expect(res).To(HaveHTTPStatus(http.StatusOK))
+}
+
+func TestOauth2FlowRedirectsToOIDCIssuerWithCustomScopes(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	m, err := mockoidc.Run()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	t.Cleanup(func() {
+		_ = m.Shutdown()
+	})
+
+	fake := m.Config()
+	mux := http.NewServeMux()
+	fakeKubernetesClient := ctrlclient.NewClientBuilder().Build()
+
+	tokenSignerVerifier, err := auth.NewHMACTokenSignerVerifier(5 * time.Minute)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	oidcCfg := auth.OIDCConfig{
+		ClientID:     fake.ClientID,
+		ClientSecret: fake.ClientSecret,
+		IssuerURL:    fake.Issuer,
+		ClaimsConfig: &auth.ClaimsConfig{Username: "email", Groups: "groups"},
+		Scopes:       []string{"test1", "test2"},
+	}
+
+	authMethods := map[auth.AuthMethod]bool{auth.OIDC: true}
+
+	authCfg, err := auth.NewAuthServerConfig(logr.Discard(), oidcCfg, fakeKubernetesClient, tokenSignerVerifier, testNamespace, authMethods)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	srv, err := auth.NewAuthServer(context.Background(), authCfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(auth.RegisterAuthServer(mux, "/oauth2", srv, 1)).To(Succeed())
+
+	s := httptest.NewServer(mux)
+
+	t.Cleanup(s.Close)
+
+	// Set the correct redirect URL now that we have a server running
+	redirectURL := s.URL + "/oauth2/callback"
+	srv.SetRedirectURL(redirectURL)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, s.URL, nil)
+	srv.OAuth2Flow().ServeHTTP(res, req)
+
+	g.Expect(res).To(HaveHTTPStatus(http.StatusSeeOther))
+
+	authCodeURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s", m.AuthorizationEndpoint(), fake.ClientID, url.QueryEscape(redirectURL), strings.Join([]string{oidc.ScopeOpenID, "test1", "test2"}, "+"))
+	g.Expect(res.Result().Header.Get("Location")).To(ContainSubstring(authCodeURL))
 }
 
 func TestOauth2FlowRedirectsToOIDCIssuerForUnauthenticatedRequests(t *testing.T) {
@@ -181,6 +233,8 @@ func TestOauth2FlowRedirectsToOIDCIssuerForUnauthenticatedRequests(t *testing.T)
 		ClientID:     fake.ClientID,
 		ClientSecret: fake.ClientSecret,
 		IssuerURL:    fake.Issuer,
+		ClaimsConfig: &auth.ClaimsConfig{Username: "email", Groups: "groups"},
+		Scopes:       auth.DefaultScopes,
 	}
 
 	authMethods := map[auth.AuthMethod]bool{auth.OIDC: true}
@@ -209,7 +263,7 @@ func TestOauth2FlowRedirectsToOIDCIssuerForUnauthenticatedRequests(t *testing.T)
 
 	g.Expect(res).To(HaveHTTPStatus(http.StatusSeeOther))
 
-	authCodeURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s", m.AuthorizationEndpoint(), fake.ClientID, url.QueryEscape(redirectURL), strings.Join([]string{"profile", oidc.ScopeOpenID, "email"}, "+"))
+	authCodeURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s", m.AuthorizationEndpoint(), fake.ClientID, url.QueryEscape(redirectURL), strings.Join([]string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, auth.ScopeEmail, auth.ScopeGroups}, "+"))
 	g.Expect(res.Result().Header.Get("Location")).To(ContainSubstring(authCodeURL))
 }
 

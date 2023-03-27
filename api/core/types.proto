@@ -11,16 +11,20 @@ message Interval {
 }
 
 enum Kind {
-    GitRepository  = 0;
-    Bucket         = 1;
-    HelmRepository = 2;
-    HelmChart      = 3;
-    Kustomization  = 4;
-    HelmRelease    = 5;
-    Cluster        = 6;
-    OCIRepository  = 7;
-    Provider       = 8;
-    Alert          = 9;
+    GitRepository         = 0;
+    Bucket                = 1;
+    HelmRepository        = 2;
+    HelmChart             = 3;
+    Kustomization         = 4;
+    HelmRelease           = 5;
+    Cluster               = 6;
+    OCIRepository         = 7;
+    Provider              = 8;
+    Alert                 = 9;
+    ImageRepository       = 10;
+    ImageUpdateAutomation = 11;
+    ImagePolicy           = 12;
+    Pod                   = 13;
 };
 
 enum HelmRepositoryType {
@@ -62,12 +66,18 @@ message NamespacedObjectReference {
     string namespace = 2;
 }
 
+message InventoryEntry {
+    string payload = 1;
+    repeated InventoryEntry children = 2;
+}
+
 message Object {
     string   payload                    = 1;
     string   clusterName                = 2;
     string   tenant                     = 3;
     string   uid                        = 4;
     repeated GroupVersionKind inventory = 5;
+    string   info                       = 6;
 }
 
 message Deployment {

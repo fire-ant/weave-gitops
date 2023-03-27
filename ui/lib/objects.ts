@@ -1,3 +1,4 @@
+import _ from "lodash";
 import { stringify } from "yaml";
 import {
   Condition,
@@ -15,17 +16,24 @@ export type Source =
   | HelmChart
   | GitRepository
   | Bucket
-  | OCIRepository;
+  | OCIRepository
+  | ImageRepository
+  | ImageUpdateAutomation;
 
 export interface CrossNamespaceObjectRef extends ObjectRef {
   apiVersion: string;
   matchLabels: { key: string; value: string }[];
+}
+export interface ImgPolicy {
+  type?: string;
+  value?: string;
 }
 export class FluxObject {
   obj: any;
   clusterName: string;
   tenant: string;
   uid: string;
+  info: string;
   children: FluxObject[];
 
   constructor(response: ResponseObject) {
@@ -34,9 +42,11 @@ export class FluxObject {
     } catch {
       this.obj = {};
     }
-    this.clusterName = response?.clusterName;
-    this.tenant = response?.tenant;
-    this.uid = response?.uid;
+    this.clusterName = response?.clusterName || "";
+    this.tenant = response?.tenant || "";
+    this.uid = response?.uid || "";
+    this.info = response?.info || "";
+    this.children = [];
   }
 
   get yaml(): string {
@@ -82,7 +92,7 @@ export class FluxObject {
 
   get conditions(): Condition[] {
     return (
-      this.obj.status?.conditions?.map((condition) => {
+      this.obj.status?.conditions?.map((condition: any) => {
         return {
           type: condition.type,
           status: condition.status,
@@ -99,7 +109,7 @@ export class FluxObject {
       /((?<hours>[0-9]+)h)?((?<minutes>[0-9]+)m)?((?<seconds>[0-9]+)s)?/.exec(
         this.obj.spec?.interval
       );
-    const interval = match.groups;
+    const interval = match?.groups || {};
     return {
       hours: interval.hours || "0",
       minutes: interval.minutes || "0",
@@ -112,11 +122,17 @@ export class FluxObject {
   }
 
   get images(): string[] {
-    const spec = this.obj.spec;
-    if (!spec) return [];
-    if (spec.template) return spec.template.spec.containers.map((x) => x.image);
-    if (spec.containers) return spec.containers.map((x) => x.image);
-    return [];
+    const containerPaths = ["spec.template.spec.containers", "spec.containers"];
+    const images = containerPaths.flatMap((path) => {
+      const containers = _.get(this.obj, path, []);
+      // _.map returns an empty list if containers is not iterable
+      return _.map(containers, (container: unknown) =>
+        _.get(container, "image")
+      );
+    });
+
+    // filter out undefined, null, and other strange objects that might be there
+    return images.filter((image) => _.isString(image));
   }
 }
 
@@ -294,6 +310,54 @@ export class Provider extends FluxObject {
   }
 }
 
+export class ImageUpdateAutomation extends FluxObject {
+  get sourceRef(): ObjectRef | undefined {
+    if (!this.obj.spec?.sourceRef) {
+      return;
+    }
+    const sourceRef = {
+      ...this.obj.spec.sourceRef,
+    };
+    if (!sourceRef.namespace) {
+      sourceRef.namespace = this.namespace;
+    }
+    return sourceRef;
+  }
+  get lastAutomationRunTime(): string {
+    return this.obj?.status?.lastAutomationRunTime || "";
+  }
+}
+export class ImagePolicy extends ImageUpdateAutomation {
+  constructor(response: ResponseObject) {
+    super(response);
+  }
+  get imagePolicy(): ImgPolicy {
+    const { policy } = this.obj?.spec;
+    const [type] = Object.keys(policy);
+    if (type) {
+      const [val] = Object.values(policy[type]);
+      return {
+        type,
+        value: (val as string) || "",
+      };
+    }
+    return {
+      type: "",
+      value: "",
+    };
+  }
+  get imageRepositoryRef(): string {
+    return this.obj?.spec?.imageRepositoryRef?.name || "";
+  }
+}
+export class ImageRepository extends ImageUpdateAutomation {
+  constructor(response: ResponseObject) {
+    super(response);
+  }
+  get tagCount(): string {
+    return this.obj.status?.lastScanResult?.tagCount || "";
+  }
+}
 export class Alert extends FluxObject {
   get providerRef(): string {
     return this.obj.spec?.providerRef.name || "";
@@ -303,6 +367,58 @@ export class Alert extends FluxObject {
   }
   get eventSources(): CrossNamespaceObjectRef[] {
     return this.obj.spec?.eventSources || [];
+  }
+}
+
+//for pods
+export type Toleration = {
+  key: string;
+  operator: string;
+  value: string;
+  effect: string;
+  tolerationSeconds: number;
+};
+
+export type Container = {
+  name: string;
+  image: string;
+  args: string[];
+  ports: any[];
+  enVar: string[];
+  //status?
+};
+
+export class Pod extends FluxObject {
+  get podIP(): string {
+    return this.obj.status?.podIP || "-";
+  }
+  get podIPs(): string[] {
+    return this.obj.status?.podIPs || ["-"];
+  }
+  get priorityClass(): string {
+    return this.obj.spec?.priorityClassName || "-";
+  }
+  get qosClass(): string {
+    return this.obj.status?.qosClass || "-";
+  }
+  get tolerations(): Toleration[] {
+    return this.obj.spec?.tolerations || [];
+  }
+  get containers(): Container[] {
+    return this.obj.spec?.containers || [];
+  }
+  get volumes(): { name: string; type: string }[] {
+    const volumeObjs = [];
+    const volumes = this.obj.spec?.volumes || [];
+    volumes.forEach((volume) => {
+      const name = volume.name || "-";
+      let type = "-";
+      Object.keys(volume).forEach((key) => {
+        if (key !== "name" && key !== "emptyDir") type = key;
+      });
+      volumeObjs.push({ name, type });
+    });
+    return volumeObjs;
   }
 }
 

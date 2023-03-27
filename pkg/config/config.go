@@ -9,8 +9,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-
-	"github.com/weaveworks/weave-gitops/pkg/logger"
 )
 
 const (
@@ -23,7 +21,10 @@ const (
 Please set you configuration with: gitops set config`
 )
 
-var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/")
+var (
+	sessionConfig *GitopsCLIConfig
+	letters       = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/")
+)
 
 type GitopsCLIConfig struct {
 	Analytics bool   `json:"analytics"`
@@ -39,9 +40,16 @@ func (config *GitopsCLIConfig) String() (string, error) {
 	return string(data), nil
 }
 
+// SetConfig sets global config to the provided value
+func SetConfig(config *GitopsCLIConfig) {
+	sessionConfig = config
+}
+
 // GetConfig reads the CLI configuration for Weave GitOps from the config file
-func GetConfig(log logger.Logger, shouldCreate bool) (*GitopsCLIConfig, error) {
-	log.Actionf("Reading GitOps CLI config ...")
+func GetConfig(shouldCreate bool) (*GitopsCLIConfig, error) {
+	if sessionConfig != nil {
+		return sessionConfig, nil
+	}
 
 	configPath, err := getConfigPath(ConfigFileName)
 	if err != nil {
@@ -50,10 +58,7 @@ func GetConfig(log logger.Logger, shouldCreate bool) (*GitopsCLIConfig, error) {
 
 	configFile, err := openConfigFile(configPath, shouldCreate)
 	if err != nil {
-		log.Failuref("Error opening config file at path: %s", configPath)
-		log.Warningf(WrongConfigFormatMsg)
-
-		return nil, err
+		return nil, fmt.Errorf("error opening config file: %w", err)
 	}
 
 	defer configFile.Close()
@@ -62,36 +67,28 @@ func GetConfig(log logger.Logger, shouldCreate bool) (*GitopsCLIConfig, error) {
 
 	data, err := readData(configFile)
 	if err != nil && !shouldCreate {
-		log.Failuref("Error reading config data from file at path: %s", configPath)
-		log.Warningf(WrongConfigFormatMsg)
-
-		return nil, err
+		return nil, fmt.Errorf("error reading config data: %w", err)
 	}
 
 	if len(data) == 0 {
 		if !shouldCreate {
-			log.Warningf(WrongConfigFormatMsg)
 			return nil, fmt.Errorf("empty config file detected at path: %s", configPath)
 		}
 	} else if err = parseConfig(data, config); err != nil {
-		log.Failuref("Error reading GitOps CLI config from file")
-
 		if shouldCreate {
 			// just replace invalid config with default config
-			log.Actionf("Replacing invalid config ...")
 		} else {
-			log.Warningf(WrongConfigFormatMsg)
-			return nil, err
+			return nil, fmt.Errorf("error reading config from file: %w", err)
 		}
 	}
+
+	sessionConfig = config
 
 	return config, nil
 }
 
 // SaveConfig saves the CLI configuration for Weave GitOps to the config file
-func SaveConfig(log logger.Logger, config *GitopsCLIConfig) error {
-	log.Actionf("Saving GitOps CLI config ...")
-
+func SaveConfig(config *GitopsCLIConfig) error {
 	configPath, err := getConfigPath(ConfigFileName)
 	if err != nil {
 		return err
@@ -123,6 +120,8 @@ func SaveConfig(log logger.Logger, config *GitopsCLIConfig) error {
 	if err != nil {
 		return fmt.Errorf("error writing to config file: %w", err)
 	}
+
+	sessionConfig = config
 
 	return nil
 }
@@ -161,10 +160,10 @@ func openConfigFile(configPath string, shouldCreate bool) (*os.File, error) {
 
 	if shouldCreate {
 		flag = os.O_RDWR | os.O_CREATE
-		perm = 0666
+		perm = 0o666
 	} else {
 		flag = os.O_RDONLY
-		perm = 0444
+		perm = 0o444
 	}
 
 	configFile, err = os.OpenFile(configPath, flag, perm)
@@ -197,11 +196,11 @@ func parseConfig(data []byte, config *GitopsCLIConfig) error {
 
 // GenerateUserID generates a string of specified length made of random characters and encodes it in base64 format
 func GenerateUserID(numChars int, seed int64) string {
-	rand.Seed(seed)
+	srand := rand.New(rand.NewSource(seed))
 
 	b := make([]byte, numChars)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = letters[srand.Intn(len(letters))]
 	}
 
 	return string(b)

@@ -8,12 +8,13 @@ COPY --chown=node:node package*.json /home/app/
 COPY --chown=node:node Makefile /home/app/
 COPY --chown=node:node tsconfig.json /home/app/
 COPY --chown=node:node .parcelrc /home/app/
+COPY --chown=node:node .npmrc /home/app/
 RUN make node_modules
 COPY --chown=node:node ui /home/app/ui
 RUN --mount=type=cache,target=/home/app/ui/.parcel-cache make ui
 
 # Go build
-FROM golang:1.19 AS go-build
+FROM golang:1.20 AS go-build
 
 # Add known_hosts entries for GitHub and GitLab
 RUN mkdir ~/.ssh

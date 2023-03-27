@@ -1,127 +1,51 @@
-import _ from "lodash";
 import * as React from "react";
 import styled from "styled-components";
 import { AppContext } from "../contexts/AppContext";
-import { useLinkResolver } from "../contexts/LinkResolverContext";
-import { useGetReconciledObjects } from "../hooks/flux";
-import { Kind } from "../lib/api/core/types.pb";
-import { formatURL, objectTypeToRoute } from "../lib/nav";
-import { Automation, FluxObject } from "../lib/objects";
-import { NoNamespace } from "../lib/types";
-import { makeImageString, statusSortHelper } from "../lib/utils";
-import DataTable, { filterByStatusCallback, filterConfig } from "./DataTable";
-import ImageLink from "./ImageLink";
-import KubeStatusIndicator, { computeMessage } from "./KubeStatusIndicator";
-import Link from "./Link";
+import { useGetInventory } from "../hooks/inventory";
+import { FluxObject } from "../lib/objects";
+import { filterByStatusCallback, filterConfig } from "./DataTable";
+import FluxObjectsTable from "./FluxObjectsTable";
 import RequestStateHandler from "./RequestStateHandler";
-import Text from "./Text";
-interface ReconciledVisualizationProps {
+
+interface Props {
   className?: string;
-  automation?: Automation;
+  kind?: string;
+  name?: string;
+  namespace?: string;
+  clusterName?: string;
+  withChildren?: boolean;
 }
 
 function ReconciledObjectsTable({
   className,
-  automation,
-}: ReconciledVisualizationProps) {
-  const {
-    data: objs,
-    error,
-    isLoading,
-  } = useGetReconciledObjects(
-    automation.name,
-    automation.namespace || NoNamespace,
-    Kind[automation.type],
-    automation.inventory,
-    automation.clusterName
+  kind,
+  name,
+  namespace,
+  clusterName,
+}: Props) {
+  const { data, isLoading, error } = useGetInventory(
+    kind,
+    name,
+    clusterName,
+    namespace,
+    false
   );
 
   const initialFilterState = {
-    ...filterConfig(objs, "type"),
-    ...filterConfig(objs, "namespace"),
-    ...filterConfig(objs, "status", filterByStatusCallback),
+    ...filterConfig(data?.objects, "type"),
+    ...filterConfig(data?.objects, "namespace"),
+    ...filterConfig(data?.objects, "status", filterByStatusCallback),
   };
 
-  const { setNodeYaml } = React.useContext(AppContext);
-  const resolver = useLinkResolver();
+  const { setDetailModal } = React.useContext(AppContext);
 
   return (
     <RequestStateHandler loading={isLoading} error={error}>
-      <DataTable
-        filters={initialFilterState}
+      <FluxObjectsTable
         className={className}
-        fields={[
-          {
-            value: (u: FluxObject) => {
-              const kind = Kind[u.type];
-              const secret = u.type === "Secret";
-              const params = {
-                name: u.name,
-                namespace: u.namespace,
-                clusterName: u.clusterName,
-              };
-              // Enterprise is "aware" of more types of objects than Core,
-              // and we want to be able to link to those within this table.
-              // The resolver func provided by the context will decide what URL this routes to.
-              const resolved = resolver && resolver(u.type, params);
-              return kind || resolved ? (
-                <Link
-                  to={resolved || formatURL(objectTypeToRoute(kind), params)}
-                >
-                  {u.name}
-                </Link>
-              ) : (
-                <Text
-                  onClick={() => (secret ? null : setNodeYaml(u))}
-                  color={secret ? "neutral40" : "primary10"}
-                  pointer={!secret}
-                >
-                  {u.name}
-                </Text>
-              );
-            },
-            label: "Name",
-            sortValue: (u: FluxObject) => u.name || "",
-            textSearchable: true,
-            maxWidth: 600,
-          },
-          {
-            label: "Type",
-            value: (u: FluxObject) => u.type,
-            sortValue: (u: FluxObject) => u.type,
-          },
-          {
-            label: "Namespace",
-            value: "namespace",
-            sortValue: ({ namespace }) => namespace,
-          },
-          {
-            label: "Status",
-            value: (u: FluxObject) =>
-              u.conditions.length > 0 ? (
-                <KubeStatusIndicator
-                  conditions={u.conditions}
-                  suspended={u.suspended}
-                  short
-                />
-              ) : null,
-            sortValue: statusSortHelper,
-          },
-          {
-            label: "Message",
-            value: (u: FluxObject) => _.first(u.conditions)?.message,
-            sortValue: ({ conditions }) => computeMessage(conditions),
-            maxWidth: 600,
-          },
-          {
-            label: "Images",
-            value: (u: FluxObject) => (
-              <ImageLink image={makeImageString(u.images)} />
-            ),
-            sortValue: (u: FluxObject) => makeImageString(u.images),
-          },
-        ]}
-        rows={objs}
+        objects={data?.objects as FluxObject[]}
+        onClick={setDetailModal}
+        initialFilterState={initialFilterState}
       />
     </RequestStateHandler>
   );

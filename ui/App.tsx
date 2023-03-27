@@ -12,8 +12,11 @@ import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { ThemeProvider } from "styled-components";
 import ErrorBoundary from "./components/ErrorBoundary";
+import ImagePolicyDetails from "./components/ImageAutomation/policies/ImagePolicyDetails";
+import ImageAutomationRepoDetails from "./components/ImageAutomation/repositories/ImageAutomationRepoDetails";
+import ImageAutomationUpdatesDetails from "./components/ImageAutomation/updates/ImageAutomationUpdatesDetails";
 import Layout from "./components/Layout";
-import Pendo from "./components/Pendo";
+import PendoContainer from "./components/PendoContainer";
 import AppContextProvider from "./contexts/AppContext";
 import AuthContextProvider, { AuthCheck } from "./contexts/AuthContext";
 import CoreClientContextProvider from "./contexts/CoreClientContext";
@@ -30,11 +33,13 @@ import GitRepositoryDetail from "./pages/v2/GitRepositoryDetail";
 import HelmChartDetail from "./pages/v2/HelmChartDetail";
 import HelmReleasePage from "./pages/v2/HelmReleasePage";
 import HelmRepositoryDetail from "./pages/v2/HelmRepositoryDetail";
+import ImageAutomationPage from "./pages/v2/ImageAutomationPage";
 import KustomizationPage from "./pages/v2/KustomizationPage";
 import Notifications from "./pages/v2/Notifications";
 import OCIRepositoryPage from "./pages/v2/OCIRepositoryPage";
 import ProviderPage from "./pages/v2/ProviderPage";
 import Sources from "./pages/v2/Sources";
+import UserInfo from "./pages/v2/UserInfo";
 
 const queryClient = new QueryClient();
 
@@ -45,9 +50,9 @@ function withSearchParams(Cmp) {
     return <Cmp {...rest} {...params} />;
   };
 }
-
 const App = () => (
   <Layout>
+    <PendoContainer />
     <ErrorBoundary>
       <Switch>
         <Route exact path={V2Routes.Automations} component={Automations} />
@@ -56,6 +61,22 @@ const App = () => (
           component={withSearchParams(KustomizationPage)}
         />
         <Route path={V2Routes.Sources} component={Sources} />
+        <Route
+          path={V2Routes.ImageAutomation}
+          component={ImageAutomationPage}
+        />
+        <Route
+          path={V2Routes.ImageAutomationUpdatesDetails}
+          component={withSearchParams(ImageAutomationUpdatesDetails)}
+        />
+        <Route
+          path={V2Routes.ImageAutomationRepositoryDetails}
+          component={withSearchParams(ImageAutomationRepoDetails)}
+        />
+        <Route
+          path={V2Routes.ImagePolicyDetails}
+          component={withSearchParams(ImagePolicyDetails)}
+        />
         <Route path={V2Routes.FluxRuntime} component={FluxRuntime} />
         <Route
           path={V2Routes.GitRepo}
@@ -89,7 +110,10 @@ const App = () => (
           path={V2Routes.Provider}
           component={withSearchParams(ProviderPage)}
         />
+        <Route path={V2Routes.UserInfo} component={UserInfo} />
+
         <Redirect exact from="/" to={V2Routes.Automations} />
+
         <Route exact path="*" component={Error} />
       </Switch>
     </ErrorBoundary>
@@ -112,10 +136,11 @@ export default function AppContainer() {
             <AppContextProvider renderFooter>
               <AuthContextProvider>
                 <CoreClientContextProvider api={Core}>
-                  <Pendo />
                   <Switch>
                     {/* <Signin> does not use the base page <Layout> so pull it up here */}
-                    <Route component={SignIn} exact path="/sign_in" />
+                    <Route exact path="/sign_in">
+                      <SignIn />
+                    </Route>
                     <Route path="*">
                       {/* Check we've got a logged in user otherwise redirect back to signin */}
                       <AuthCheck>

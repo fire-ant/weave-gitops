@@ -39,13 +39,29 @@ exports[`KubeStatusIndicator snapshots renders error 1`] = `
   font-weight: 800;
   text-transform: none;
   font-style: normal;
-  color: #BC381D;
+  color: #BC3B1D;
 }
 
 .c4 svg {
-  fill: #BC381D !important;
+  fill: #BC3B1D;
   height: 16px;
   width: 16px;
+}
+
+.c4 svg path.path-fill {
+  fill: #BC3B1D !important;
+  -webkit-transition: fill 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+  transition: fill 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+}
+
+.c4 svg.sources {
+  fill: none !important;
+}
+
+.c4 svg.sources rect {
+  stroke: #BC3B1D !important;
+  -webkit-transition: stroke 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+  transition: stroke 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
 }
 
 .c4.downward {
@@ -62,7 +78,7 @@ exports[`KubeStatusIndicator snapshots renders error 1`] = `
 
 .c4 .c5 {
   margin-left: 4px;
-  color: #BC381D;
+  color: #BC3B1D;
 }
 
 .c4 img {
@@ -92,7 +108,7 @@ exports[`KubeStatusIndicator snapshots renders error 1`] = `
     </svg>
     <span
       className="c5 c6"
-      color="alert"
+      color="alertOriginal"
       size="medium"
     >
       Not Ready
@@ -144,9 +160,25 @@ exports[`KubeStatusIndicator snapshots renders success 1`] = `
 }
 
 .c4 svg {
-  fill: #27AE60 !important;
+  fill: #27AE60;
   height: 16px;
   width: 16px;
+}
+
+.c4 svg path.path-fill {
+  fill: #27AE60 !important;
+  -webkit-transition: fill 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+  transition: fill 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+}
+
+.c4 svg.sources {
+  fill: none !important;
+}
+
+.c4 svg.sources rect {
+  stroke: #27AE60 !important;
+  -webkit-transition: stroke 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
+  transition: stroke 200ms cubic-bezier(0.4,0,0.2,1) 0ms;
 }
 
 .c4.downward {
@@ -193,7 +225,7 @@ exports[`KubeStatusIndicator snapshots renders success 1`] = `
     </svg>
     <span
       className="c5 c6"
-      color="success"
+      color="successOriginal"
       size="medium"
     >
       Applied revision: main/a3a54ef4a87f8963b14915639f032aa6ec1b8161

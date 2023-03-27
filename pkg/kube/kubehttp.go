@@ -10,7 +10,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2beta1"
+	automation1 "github.com/fluxcd/image-automation-controller/api/v1beta1"
+	reflectorv1 "github.com/fluxcd/image-reflector-controller/api/v1beta1"
 	kustomizev2 "github.com/fluxcd/kustomize-controller/api/v1beta2"
+	notificationv2 "github.com/fluxcd/notification-controller/api/v1beta1"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1beta2"
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,6 +35,9 @@ func CreateScheme() (*apiruntime.Scheme, error) {
 		appsv1.AddToScheme,
 		rbacv1.AddToScheme,
 		authv1.AddToScheme,
+		notificationv2.AddToScheme,
+		reflectorv1.AddToScheme,
+		automation1.AddToScheme,
 	}
 
 	err := builder.AddToScheme(scheme)
@@ -50,15 +56,13 @@ const (
 )
 
 var (
-	//ErrWegoConfigNotFound indicates weave gitops config could not be found
+	// ErrWegoConfigNotFound indicates weave gitops config could not be found
 	ErrWegoConfigNotFound = errors.New("Wego Config not found")
 )
 
 // InClusterConfig defines a function for checking if this code is executing in kubernetes.
 // This can be overriden if needed.
-var InClusterConfig func() (*rest.Config, error) = func() (*rest.Config, error) {
-	return rest.InClusterConfig()
-}
+var InClusterConfig func() (*rest.Config, error) = rest.InClusterConfig
 
 var ErrNamespaceNotFound = errors.New("namespace not found")
 
